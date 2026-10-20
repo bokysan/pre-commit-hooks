@@ -58,6 +58,17 @@ repos:
         files: '^(licensing\.sh|README\.md|\.pre-commit-hooks\.yaml|scripts/check-docs\.sh)$'
         pass_filenames: false
 
+      - id: license-mirror
+        name: LICENSE is the same text as LICENSES/MPL-2.0.txt
+        description: >-
+          LICENSE is the copy GitHub and people read, LICENSES/MPL-2.0.txt the
+          copy reuse reads. reuse checks that a cited licence has a text, never
+          that two copies agree, so this does.
+        entry: cmp LICENSE LICENSES/MPL-2.0.txt
+        language: system
+        files: '^(LICENSE|LICENSES/MPL-2\.0\.txt)$'
+        pass_filenames: false
+
       - id: version-matches-tag
         name: README.md pins one version, and on a tag it is the tag
         entry: scripts/check-version.sh

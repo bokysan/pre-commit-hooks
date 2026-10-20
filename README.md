@@ -1202,4 +1202,4 @@ versioning and releases.
 
 ## Licence of this repository
 
-Code: [MPL-2.0](LICENSES/MPL-2.0.txt). Documentation: [CC-BY-4.0](LICENSES/CC-BY-4.0.txt).
+Code: [MPL-2.0](LICENSE). Documentation: [CC-BY-4.0](LICENSES/CC-BY-4.0.txt).
