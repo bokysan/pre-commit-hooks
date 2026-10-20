@@ -23,10 +23,11 @@ put() {
 }
 
 # licensing <args...>: run the script in $ROOT; sets $status and $output (bats `run`).
-# CI is cleared so --mode auto means the local mode, and the cache lives outside
-# the tree (an untracked file inside it would fail `reuse lint`).
+# CI is cleared so --mode auto means the local mode, and PRE_COMMIT so the hints
+# do not depend on whether the suite itself runs from a pre-commit hook. The
+# cache lives outside the tree (an untracked file inside it would fail `reuse lint`).
 licensing() {
-  run env -C "$ROOT" CI= LICENSING_CACHE_DIR="$CACHE_DIR" "${EXTRA_ENV[@]}" bash "$LICENSING" "$@"
+  run env -u PRE_COMMIT -C "$ROOT" CI= LICENSING_CACHE_DIR="$CACHE_DIR" "${EXTRA_ENV[@]}" bash "$LICENSING" "$@"
 }
 EXTRA_ENV=()
 
