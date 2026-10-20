@@ -44,21 +44,17 @@ jobs:
       - name: Consume this checkout as a pre-commit repo
         run: |
           set -euo pipefail
+          rev="$(git rev-parse HEAD)"
           consumer="$(mktemp -d)"
-          cp .licensing.conf REUSE.toml mise.toml "$consumer/"
-          cp -R LICENSES "$consumer/LICENSES"
           cd "$consumer"
           git init -q .
-          cat > .pre-commit-config.yaml <<YAML
-          repos:
-            - repo: ${GITHUB_WORKSPACE}
-              rev: HEAD
-              hooks:
-                - id: licensing
-          YAML
-          git -C "${GITHUB_WORKSPACE}" rev-parse HEAD >/dev/null
-          rev="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD)"
-          sed -i "s/rev: HEAD/rev: ${rev}/" .pre-commit-config.yaml
+          # A minimal compliant repository: a policy, and REUSE information for every file.
+          printf 'LICENSING_ALLOW=(MIT)\nLICENSING_DENY=(GPL-3.0-only)\n' > .licensing.conf
+          printf 'version = 1\n\n[[annotations]]\npath = "**"\nSPDX-FileCopyrightText = "2026 Example"\nSPDX-License-Identifier = "MPL-2.0"\n' > REUSE.toml
+          mkdir LICENSES
+          cp "${GITHUB_WORKSPACE}/LICENSES/MPL-2.0.txt" LICENSES/
+          cp "${GITHUB_WORKSPACE}/mise.toml" .
+          printf 'repos:\n  - repo: %s\n    rev: %s\n    hooks:\n      - id: licensing\n' "${GITHUB_WORKSPACE}" "${rev}" > .pre-commit-config.yaml
           git add -A
           pre-commit run licensing --all-files
 
