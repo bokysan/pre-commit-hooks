@@ -1045,8 +1045,10 @@ render_findings() { # render_findings <tsv file> [max REVIEW rows]
   local f="$1" max="${2:-0}"
   [[ -s "$f" ]] || return 0
   color_init
+  # LC_ALL=C for awk too: dw() below counts bytes, and GNU awk in a UTF-8 locale
+  # rejects the byte range it uses ("Invalid collation character").
   LC_ALL=C sort -t"$(printf '\t')" -k1,1 -k2,2 -k3,3 "$f" \
-    | awk -F'\t' -v max="$max" -v conf="${CONF##*/}" \
+    | LC_ALL=C awk -F'\t' -v max="$max" -v conf="${CONF##*/}" \
       -v cD="$C_DENY" -v cR="$C_REVIEW" -v cL="$C_LIC" -v cN="$C_NAME" \
       -v cP="$C_PATH" -v cH="$C_HEAD" -v cZ="$C_RESET" '
     function dw(s,   t, n) { t = s; n = gsub(/[\200-\277]/, "", t); return length(s) - n }
@@ -4109,13 +4111,14 @@ obligations_matrix() { # obligations_matrix <rows file>
     printf '%s\t%s\n' "${entry%%|*}" "${entry#*|}" >> "$duties"
   done
 
-  awk -F'\t' -v cols="$(term_cols)" -v cH="$C_HEAD" -v cL="$C_LIC" \
+  # LC_ALL=C: awk then counts bytes on every platform, which dw() below
+  # expects, and GNU awk accepts its byte range (in a UTF-8 locale it refuses
+  # it with "Invalid collation character" and prints nothing).
+  LC_ALL=C awk -F'\t' -v cols="$(term_cols)" -v cH="$C_HEAD" -v cL="$C_LIC" \
       -v cY="$C_NAME" -v cP="$C_PATH" -v cU="$C_REVIEW" -v cZ="$C_RESET" '
     # Display width, not byte count. A UTF-8 continuation byte is part of the
-    # character before it and occupies no column of its own; an awk that counts
-    # bytes would pad the row short by exactly that many and shift every column
-    # after it. (An awk that already counts characters finds nothing to
-    # subtract, so this is right either way.)
+    # character before it and occupies no column of its own, so it is
+    # subtracted; padding by bytes would shift every column after it.
     function dw(s,   t, n) { t = s; n = gsub(/[\200-\277]/, "", t); return length(s) - n }
     function rule(w,   o) { o = "+"; while (w-- > 0) o = o "-"; return o }
     function pad(s, w,   d) { d = w - dw(s); if (d < 0) d = 0; return s sp(d) }
