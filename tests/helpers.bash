@@ -31,5 +31,5 @@ licensing() {
 EXTRA_ENV=()
 
 teardown() {
-  [[ -n "${ROOT:-}" ]] && rm -rf "$ROOT" "$CACHE_DIR"
+  if [[ -n "${ROOT:-}" ]]; then rm -rf "$ROOT" "$CACHE_DIR"; fi
 }

@@ -70,6 +70,9 @@ crate() {
 }
 
 deps_check() { licensing check --only deps --mode full; }
+# A crate deliberately left out of the registry: the install check would stop
+# the run before the scan, so these tests read the tree as it is.
+deps_check_as_is() { licensing check --only deps --mode full --skip-install-check; }
 
 @test "a crate's licence is read from the registry: the GPL crate fails" {
   crate mit-crate 1.0.0 'license = "MIT OR Apache-2.0"'
@@ -100,14 +103,14 @@ deps_check() { licensing check --only deps --mode full; }
   [[ "$output" != *"mit-crate"* ]]
 }
 
-@test "a crate cargo never unpacked stays lockfile-only and exempt" {
+@test "with the install check skipped, a crate not unpacked stays lockfile-only and exempt" {
   crate mit-crate 1.0.0 'license = "MIT"'
-  deps_check
+  deps_check_as_is
   [ "$status" -eq 0 ]
 }
 
 @test "the SBOM lists components even when none has a licence" {
-  licensing sbom -o "$ROOT.sbom.json"
+  licensing sbom --skip-install-check -o "$ROOT.sbom.json"
   [ "$status" -eq 0 ]
   run cat "$ROOT.sbom.json"
   rm -f "$ROOT.sbom.json"
@@ -118,16 +121,49 @@ deps_check() { licensing check --only deps --mode full; }
 @test "a crate unpacked after a cached run is not served from the stale cache" {
   EXTRA_ENV=("CARGO_HOME=$CARGO_HOME")   # cache ON for this one
   crate mit-crate 1.0.0 'license = "MIT"'
-  deps_check
+  deps_check_as_is
   [ "$status" -eq 0 ]
   crate gpl-crate 2.0.0 'license = "GPL-3.0-only"'
-  deps_check
+  deps_check_as_is
   [ "$status" -ne 0 ]
 }
 
 @test "LICENSING_CACHE=0 in the environment turns the cache off" {
   EXTRA_ENV=(LICENSING_CACHE=0 LICENSING_VERBOSE=1 "CARGO_HOME=$CARGO_HOME")
-  deps_check
-  deps_check
+  deps_check_as_is
+  deps_check_as_is
   [[ "$output" != *"from cache"* ]]
+}
+
+@test "crates missing from the Cargo registry stop the check and name cargo fetch" {
+  crate mit-crate 1.0.0 'license = "MIT"'      # gpl-crate is in Cargo.lock but not unpacked
+  # The command is printed only when cargo is available; a stand-in will do.
+  BIN="$(mktemp -d)"; printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/cargo"; chmod +x "$BIN/cargo"
+  EXTRA_ENV=(LICENSING_CACHE=0 "CARGO_HOME=$CARGO_HOME" LICENSING_TOOL_RUNNER=path "PATH=$BIN:$PATH")
+  deps_check
+  rm -rf "$BIN"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cargo fetch"* ]]
+  [[ "$output" == *"some crates of Cargo.lock are not there"* ]]
+  [[ "$output" != *"%CARGOCRATES%"* ]]
+}
+
+@test "auto-install runs cargo fetch, and a GPL crate it unpacks fails the check" {
+  # A stand-in cargo: "cargo fetch" unpacks both crates, as the real one does.
+  BIN="$(mktemp -d)"
+  cat > "$BIN/cargo" <<SH
+#!/usr/bin/env bash
+[ "\$1" = fetch ] || exit 1
+d="$CARGO_HOME/$INDEX"
+mkdir -p "\$d/mit-crate-1.0.0" "\$d/gpl-crate-2.0.0"
+printf '[package]\nname = "mit-crate"\nversion = "1.0.0"\nlicense = "MIT"\n' > "\$d/mit-crate-1.0.0/Cargo.toml"
+printf '[package]\nname = "gpl-crate"\nversion = "2.0.0"\nlicense = "GPL-3.0-only"\n' > "\$d/gpl-crate-2.0.0/Cargo.toml"
+SH
+  chmod +x "$BIN/cargo"
+  EXTRA_ENV=(LICENSING_CACHE=0 "CARGO_HOME=$CARGO_HOME" LICENSING_AUTO_INSTALL=1 LICENSING_TOOL_RUNNER=path "PATH=$BIN:$PATH")
+  deps_check
+  rm -rf "$BIN"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"gpl-crate"* ]]
+  [[ "$output" == *"GPL-3.0-only"* ]]
 }

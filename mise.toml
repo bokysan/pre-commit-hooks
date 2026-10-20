@@ -9,5 +9,7 @@
 [tools]
 syft = "1.51.0"
 "pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }
+python = "3.13"      # the interpreter the pipx backend installs reuse into
+uv = "0.9.7"          # mise builds "pipx:" tools with uv when it is present
 pre-commit = "4.6.1"
 bats = "1.11.1"

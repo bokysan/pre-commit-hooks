@@ -51,8 +51,15 @@ repos:
         always_run: true
         pass_filenames: false
 
+      - id: docs-match-script
+        name: README.md documents every setting, option, command, hook and file
+        entry: scripts/check-docs.sh
+        language: script
+        files: '^(licensing\.sh|README\.md|\.pre-commit-hooks\.yaml|scripts/check-docs\.sh)$'
+        pass_filenames: false
+
       - id: version-matches-tag
-        name: licensing.sh version is X.Y.Z and equals the tag
+        name: README.md pins one version, and on a tag it is the tag
         entry: scripts/check-version.sh
         language: script
         always_run: true

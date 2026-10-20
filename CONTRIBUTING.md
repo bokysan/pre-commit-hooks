@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 ## Gates
 
-`pre-commit run --all-files` runs everything CI runs: whitespace and YAML hygiene, `shellcheck --severity=style`, `actionlint`, the version check, and this repository's own `licensing` hook. `bats tests` runs the behaviour tests (pre-push stage and CI). The commit-msg stage enforces Conventional Commits: `<type>[(scope)][!]: <description>` with type one of `feat fix perf refactor test docs build ci chore style revert`.
+`pre-commit run --all-files` runs everything CI runs: whitespace and YAML hygiene, `shellcheck --severity=style`, `actionlint`, the version check, the documentation check (`scripts/check-docs.sh`), and this repository's own `licensing` hook. `bats tests` runs the behaviour tests (pre-push stage and CI). The commit-msg stage enforces Conventional Commits: `<type>[(scope)][!]: <description>` with type one of `feat fix perf refactor test docs build ci chore style revert`.
 
 ## Tests
 
@@ -15,14 +15,11 @@ SPDX-License-Identifier: CC-BY-4.0
 
 ## Versioning and releases
 
-The repository version is `licensing.sh`'s version.
+The git tag is the version; `licensing.sh` has no version number of its own, and `--version` prints the tag of the
+checkout it runs from.
 
-1. Set `LICENSING_SH_VERSION="X.Y.Z"` in `licensing.sh` and update the `rev: vX.Y.Z` in its integration notes and in the README.
-2. `scripts/check-version.sh` must pass.
-3. Commit, then tag `vX.Y.Z` and push the tag.
+1. Set every `rev:` in README.md to the new `vX.Y.Z`. `scripts/check-version.sh` checks that they agree.
+2. Commit, tag `vX.Y.Z`, and push the commit and the tag. CI checks that the tag matches the README, and publishes the
+   GitHub release.
 
-Semver: a new knob or command is a minor; a changed default verdict or policy-file contract is a major; a fix is a patch. The scan cache key includes the script version and a checksum of the file itself, so a release invalidates every consumer's cache once.
-
-## Mirror
-
-Forgejo is the source of truth. The GitHub copy is a push mirror (Forgejo: Settings → Repository → Mirror settings → Push mirror, target `https://github.com/bokysan/pre-commit-hooks.git`, with a GitHub token that may push). **The mirror is not configured until the maintainer says so**, and nothing in this repository pushes to GitHub by itself.
+Semver: a new knob or command is a minor; a changed default verdict or policy-file contract is a major; a fix is a patch. The scan cache key includes a checksum of `licensing.sh`, so any change to it invalidates every consumer's cache once.

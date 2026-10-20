@@ -10,23 +10,23 @@
   always_run: true
   pass_filenames: false
 
-# The commands below are run on demand, never on commit:
-#   pre-commit run licensing-fix --hook-stage manual --all-files
-# They edit files (REUSE.toml, LICENSES/) or write one (sbom.spdx.json), which is
-# why they are in the manual stage. `init` and any other flag combination: see
-# the README, "Running the other commands".
-- id: licensing-fix
-  name: licensing fix (regenerate REUSE.toml's vendored section)
-  description: Rewrites the generated section of REUSE.toml from a fresh scan, then runs the full check.
-  entry: licensing.sh fix
+# The hooks below run on demand, never on commit:
+#   pre-commit run licensing-download --hook-stage manual
+# They write files (REUSE.toml, LICENSES/, sbom.spdx.json), which is why they are
+# in the manual stage. Every hook takes `args:` in the consumer's config, appended
+# to its entry; licensing-cli is the bare script, for any other command line.
+- id: licensing-init
+  name: licensing init (write a starter policy and REUSE.toml)
+  description: Writes .licensing.conf, a starter REUSE.toml and .license-exceptions.txt. Never overwrites a file that exists.
+  entry: licensing.sh init
   language: script
   stages: [manual]
   always_run: true
   pass_filenames: false
 
 - id: licensing-download
-  name: licensing download (fetch missing LICENSES/ texts, drop unused ones)
-  description: Fetches the missing licence texts into LICENSES/ and removes the ones nothing uses.
+  name: licensing download (update LICENSES/ and the generated part of REUSE.toml)
+  description: Fetches missing licence texts into LICENSES/, removes unused ones, and updates the generated part of REUSE.toml.
   entry: licensing.sh download --fix
   language: script
   stages: [manual]
@@ -37,6 +37,18 @@
   name: licensing sbom (write sbom.spdx.json)
   description: Writes an SPDX 2.3 JSON SBOM from the same inventory the gate checks.
   entry: licensing.sh sbom
+  language: script
+  stages: [manual]
+  always_run: true
+  pass_filenames: false
+
+- id: licensing-cli
+  name: licensing.sh (any command, from the hook's args)
+  description: >-
+    The script itself, with no command. Give it one in `args:` and a name in
+    `alias:`, for example args [check, --obligations] as alias
+    licensing-obligations, and run it with pre-commit run <alias>.
+  entry: licensing.sh
   language: script
   stages: [manual]
   always_run: true

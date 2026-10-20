@@ -27,7 +27,7 @@ teardown() {
 
 @test "missing syft fails first with the mise and PATH remedy" {
   run env -C "$ROOT" CI= LICENSING_CACHE=0 PATH="$EMPTY_BIN" "$EMPTY_BIN/bash" "$LICENSING" check --mode delta
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"syft not found, neither through mise nor on PATH"* ]]
 }
 
@@ -35,13 +35,17 @@ teardown() {
   command -v syft >/dev/null || skip "syft not installed"
   ln -s "$(command -v syft)" "$EMPTY_BIN/syft"
   run env -C "$ROOT" CI= LICENSING_CACHE=0 PATH="$EMPTY_BIN" "$EMPTY_BIN/bash" "$LICENSING" check --mode delta
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"reuse not found, neither through mise nor on PATH"* ]]
 }
 
-@test "LICENSING_REUSE=0 does not demand reuse" {
+@test "LICENSING_REUSE=0 in the policy does not demand reuse" {
   command -v syft >/dev/null || skip "syft not installed"
   ln -s "$(command -v syft)" "$EMPTY_BIN/syft"
-  run env -C "$ROOT" CI= LICENSING_CACHE=0 LICENSING_REUSE=0 PATH="$EMPTY_BIN" "$EMPTY_BIN/bash" "$LICENSING" check --only deps --mode full
-  [[ "$output" != *"reuse not found"* ]]
+  printf 'LICENSING_REUSE=0\n' >> "$ROOT/.licensing.conf"
+  # --only lint is the part that needs reuse; without the setting it fails on
+  # the missing tool (the test above), with it the lint is skipped and says so.
+  run env -C "$ROOT" CI= LICENSING_CACHE=0 PATH="$EMPTY_BIN" "$EMPTY_BIN/bash" "$LICENSING" check --only lint --mode full
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REUSE lint is switched OFF"* ]]
 }

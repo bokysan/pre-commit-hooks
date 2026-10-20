@@ -2,488 +2,50 @@
 # SPDX-FileCopyrightText: 2026 Bojan Čekrlić
 # SPDX-License-Identifier: MPL-2.0
 #
-# licensing.sh — the pre-commit hook `licensing` of https://git.b8.si/boky/pre-commit-hooks
-# (mirrored at https://github.com/bokysan/pre-commit-hooks). The version of this
-# file IS the version of that repository: the tag vX.Y.Z carries
-# LICENSING_SH_VERSION="X.Y.Z" (scripts/check-version.sh holds the two equal).
+# licensing.sh — one check for a project's licensing: every third-party
+# dependency carries a licence the policy allows, REUSE.toml matches the same
+# scan, and every file carries SPDX copyright and licence information.
 #
-# licensing.sh — one gate for BOTH halves of a project's licensing story:
+# The manual is README.md in https://github.com/bokysan/pre-commit-hooks: why
+# this exists, the commands, every LICENSING_* setting, and the files it reads
+# and writes. This comment is what `licensing.sh --help` prints.
 #
-#   1. DEPENDENCY LICENCES  every third-party component syft finds in the tree
-#      (Go modules, npm, PyPI, crates, gems, Maven, Swift, GitHub Actions, …)
-#      must carry a licence your OUTBOUND licence can absorb. A copyleft
-#      dependency would relicense the whole product.
-#   2. FILE LICENSING       every file in the tree must carry SPDX copyright +
-#      licence info (REUSE compliance) — first-party via inline headers,
-#      vendored/third-party via REUSE.toml annotations generated from (1).
+# Usage: licensing.sh [command] [options]
 #
-# The two halves cooperate: ONE syft scan produces the component inventory that
-# both the allow-list gate AND the REUSE.toml annotations consume, so a newly
-# added dependency cannot pass one and fail the other, and the two can never
-# disagree about a licence id.
+# Commands (default: check)
+#   check      run the dependency gate, the REUSE.toml drift check and reuse lint
+#   download   update LICENSES/ and the generated part of REUSE.toml (--fix: also
+#              remove unused licence texts)
+#   sbom       write an SPDX 2.3 JSON SBOM (default sbom.spdx.json)
+#   init       write a starter .licensing.conf, REUSE.toml and .license-exceptions.txt
 #
-# ===========================================================================
-# INTEGRATING THIS SCRIPT INTO A REPOSITORY
-# ===========================================================================
-# The script holds no project data and no tool paths, so integration is: pin
-# the tools, write a policy file, wire the hook. ~10 minutes.
+# Options
+#   --mode auto|full|delta    auto = full under CI, else LICENSING_LOCAL_MODE
+#   --only deps,toml,lint     run only these parts of check
+#   -o, --output FILE         sbom: where to write
+#   --all | --fix             download: fetch missing | fetch missing and remove unused
+#   --dry-run                 download: print what would change, write nothing
+#   --auto-install            run the install command for uninstalled dependencies
+#   --skip-install-check      scan the tree as it is, without the install preflight
+#   --no-cache                scan even when a cached scan matches
+#   --jobs N|auto             syft processes to run at once
+#   --obligations             after check: the duty x licence matrix
+#   --components              after check: each licence's duties and components
+#   --porcelain[=v1]          tab-separated records on stdout, for scripts
+#   --color auto|on|off       colour in the findings table
+#   --progress auto|on|off    terminal progress bar (OSC 9;4)
+#   --progress-test           show what this terminal does with the progress bar
+#   --completion bash|zsh|fish  print a shell completion script
+#   -v, --verbose             progress, timings and what was skipped
+#   -V, --version             print the version
+#   -h, --help                print this text
 #
-# 1. Nothing to copy: pre-commit fetches this file with the hook (step 5).
-#    To run it by hand, check out the hooks repository and call licensing.sh.
-#
-# 2. Pin the tools with mise (https://mise.jdx.dev), in mise.toml:
-#
-#      [tools]
-#      syft = "1.51.0"
-#      "pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }
-#
-#    then `mise install`. The script runs `mise exec -- syft` / `mise exec --
-#    reuse` whenever mise provides them, so every developer and every CI run
-#    uses the SAME versions. Pin the ECOSYSTEM INSTALLERS the same way if you
-#    use --auto-install: it runs npm ci, uv sync, poetry install, bundle
-#    install and the rest, resolves each of them through mise before PATH, and
-#    runs the whole command under `mise exec` wherever a mise config applies —
-#    so a Python workspace wants python and uv (or poetry) pinned beside syft
-#    and reuse, a Node one wants node and its package manager:
-#
-#      python = "3.13"
-#      uv = "0.9.7"
-#
-#    Some installers exist in mise's registry only behind a plugin backend
-#    (yarn, dart and flutter are asdf:/vfox: entries), so those need that
-#    backend usable on the machine — pin the backend spelling outright
-#    ("asdf:mise-plugins/mise-yarn" = "1.22.22"), or put the tool on PATH. Install commands (--auto-install) run under
-#    `mise exec` too, in the workspace directory, so a pinned python or node —
-#    including one pinned by a directory-scoped mise config in a monorepo — is
-#    the interpreter the installer uses. This matters: licence detection changes between
-#    syft releases, REUSE.toml is generated from that detection, and a version
-#    skew therefore shows up as phantom REUSE.toml drift on someone else's
-#    machine. Without mise the script falls back to whatever is on PATH and
-#    warns when the version differs from LICENSING_SYFT_VERSION.
-#
-# 3. Write the policy file — the script has NO built-in licence policy and
-#    refuses to run without one:
-#
-#      scripts/licensing.sh init          # writes .licensing.conf
-#
-#    It starts strict (permissive + public domain in, every copyleft strength
-#    out). Widen LICENSING_ALLOW to what your outbound licence can absorb, and
-#    set LICENSING_SYFT_VERSION to the version pinned in mise.toml.
-#    Every other knob has a working default (documented at its definition
-#    below). Check the result with:
-#
-#      scripts/licensing.sh check --only deps
-#
-# 4. REUSE half. Every file in the tree must carry SPDX copyright + licence
-#    info: first-party files via inline headers, everything that cannot hold a
-#    comment (binaries, fixtures, vendored trees) via REUSE.toml. Write the
-#    hand-authored annotations at the top of REUSE.toml, then add the marker
-#    line where the generated section should begin:
-#
-#      # --- generated by licensing.sh: vendored components (do not edit below) ---
-#
-#    then `scripts/licensing.sh fix` fills everything below it, one annotation
-#    per vendored component, with licences from the same scan. A REUSE.toml
-#    with no marker is treated as hand-maintained: linted, never rewritten.
-#    `reuse lint` runs on every invocation either way. While a repository is
-#    still growing headers, LICENSING_REUSE=0 silences it temporarily and says
-#    so on every run.
-#
-#    Every id those headers and annotations name needs its TEXT in LICENSES/,
-#    and a text nothing names any more fails the lint just as loudly:
-#
-#      scripts/licensing.sh download --fix
-#
-#    fetches the missing ones and removes the unused ones, counting both the
-#    ids REUSE sees and the ids the component scan found.
-#
-#    A dependency's licence text is a text REUSE calls UNUSED, though: the
-#    package it belongs to is in node_modules, which git ignores, so nothing
-#    in the tree references it and `reuse lint` fails on the texts it was
-#    asked to fetch. Two answers, and the repository decides which:
-#    LICENSING_LICENSE_SOURCES="reuse" plus `download --fix` throws them away,
-#    or LICENSING_NOTICE_FILE names the document that ships them and REUSE.toml
-#    claims them for it. There is no third answer — REUSE has no way to be told
-#    that a text is fine on its own. LICENSING_NOTICE_FILE is the default, and
-#    `fix` writes that file when one is needed, so `fix` followed by `check` is
-#    the whole procedure. It comes before `download --fix`, though: the
-#    annotation counts as a reference, so a text a dropped dependency left
-#    behind looks used until it is regenerated.
-#
-# 5. Wire the gates. Pre-commit (https://pre-commit.com), one hook in
-#    .pre-commit-config.yaml — one entry covers all three checks:
-#
-#      - repo: https://git.b8.si/boky/pre-commit-hooks
-#        rev: v1.36.0               # the tag equals the script version
-#        hooks:
-#          - id: licensing          # runs: licensing.sh check --mode auto
-#
-#    The hook is always_run and takes no filenames: a new FILE needs a header,
-#    so it must never be scoped to changed paths.
-#
-#    CI (GitHub Actions / Forgejo / anything), one job:
-#
-#      - uses: actions/checkout@v4
-#      - uses: jdx/mise-action@v2               # installs the pinned tools
-#      - run: go mod download                   # Go repos only: lets syft read
-#                                               # licences from the module cache
-#      - run: pre-commit run licensing --all-files
-#
-#    `--mode auto` resolves to full when the CI env var is set, so the same
-#    entry point is correct in both places; --mode full above is explicit
-#    because CI is the authoritative run.
-#
-# ===========================================================================
-# COMMANDS
-# ===========================================================================
-#   check [--mode auto|full|delta] [--only deps,toml,lint]
-#         [--auto-install] [--skip-install-check] [--no-cache] [--verbose]
-#         [--jobs N|auto] [--progress auto|on|off] [--porcelain[=v1]]
-#         The gate. Runs the dependency allow-list, the REUSE.toml drift check
-#         and `reuse lint`. --only narrows to a subset (comma-separated).
-#         Before scanning it verifies that each manifest's packages are
-#         installed — licences live in the packages, not the lockfile — and
-#         stops with the command to run if they are not. Every manifest in the
-#         tree is checked, so a monorepo gets one line per workspace naming its
-#         own directory. --auto-install runs those commands, each in its own
-#         directory and through mise when mise provides the tool, installing
-#         every location it can and reporting only the ones it cannot;
-#         --skip-install-check scans the tree as it is — note that it also
-#         skips the discovery of package directories OUTSIDE the repository
-#         (poetry's virtualenv, the Go module cache), so licences that only
-#         exist there go missing.
-#         The scan is CACHED (see CACHING below), so a second run over an
-#         unchanged tree is instant and a run after one edit re-scans only what
-#         changed. --no-cache scans regardless.
-#   fix   Rewrite REUSE.toml's generated section from a fresh scan, then run
-#         the full `check`. Everything ABOVE the marker line is yours and is
-#         copied through untouched; everything below it is regenerated, so a
-#         hand-written annotation belongs above the marker and nowhere else.
-#         Run it whenever the set of dependencies changes — added, removed or
-#         bumped — and whenever `check` reports REUSE.toml drift, which is the
-#         same condition seen from the other side. It also writes
-#         LICENSING_NOTICE_FILE the first time, if one is configured and
-#         missing, because the dependency licence texts in LICENSES/ need a
-#         document in the tree to account for them or `reuse lint` fails on
-#         them as unused. It never overwrites that file afterwards.
-#         `fix` comes BEFORE `download --fix`: the annotation it writes counts
-#         as a reference, so a text left behind by a dropped dependency still
-#         looks used until REUSE.toml has been regenerated.
-#         It edits files in the working tree. Nothing else here does.
-#   download [--all|--fix] [--dry-run] [--auto-install|--skip-install-check]
-#         The LICENSES/ directory: one <SPDX-id>.txt per licence the tree
-#         uses. --all (the default) fetches every text that is missing; --fix
-#         fetches those AND removes the texts nothing uses any more, which
-#         matters because `reuse lint` fails on an unused licence exactly as
-#         it fails on a missing one. Both directions read BOTH halves of this
-#         script: the ids REUSE finds in inline headers and REUSE.toml, and
-#         the ids the component scan found — `reuse download --all` knows only
-#         the first, so a dependency's licence text is never fetched and a
-#         dropped one is never cleaned up. --dry-run prints the same lines and
-#         writes nothing. A LicenseRef- text exists nowhere but in this
-#         repository, so it is named for you to write by hand rather than
-#         fetched. LICENSING_LICENSE_SOURCES picks the halves that count.
-#   sbom [-o FILE] [--auto-install|--skip-install-check] [--no-cache]
-#         Write an SPDX 2.3 JSON SBOM (default sbom.spdx.json) for release
-#         artifacts or a vulnerability scanner, from the SAME merged inventory
-#         `check` gates — not from a syft invocation of its own.
-#         That distinction is the whole point. A plain `syft scan dir:.` of a
-#         repository whose Python dependencies live in a poetry virtualenv
-#         outside the tree catalogues those packages from the lockfile and
-#         reports a licence for NONE of them; this inventory has them, because
-#         it also reads the package caches the preflight found, re-scans the
-#         manifests that must be read in isolation, and falls back to
-#         dist-info metadata and the LICENSE text a package ships.
-#         Every package carries name, version, a licence expression (or
-#         NOASSERTION, which is the honest answer and not an omission) and a
-#         purl for the ecosystems where one can be built unambiguously.
-#         For syft's native formats — CycloneDX, syft-json, tag-value — run
-#         syft directly; what comes back is the tree and nothing else.
-#   --progress-test
-#         Emit a progress ramp and tell you whether this terminal is on the
-#         allow-list. A supporting terminal draws a bar in its tab or taskbar;
-#         one that does not prints the escape bytes as text. Needs no config.
-#   --version / -V
-#         Print the script's version and date — the file is meant to be copied
-#         between repositories, so this is how you spot a stale copy.
-#   init  Seed the repository: write .licensing.conf (a usable strict policy),
-#         a starter REUSE.toml covering the files that cannot carry an inline
-#         SPDX header, and an empty .license-exceptions.txt explaining what an
-#         exception is and showing the format, commented out. Never overwrites
-#         a file that is already there.
-#
-# MODES
-#   full   Scan and gate every component; verify REUSE.toml; lint the tree.
-#   delta  Skip the scan and the dependency gate unless a dependency manifest
-#          changed vs HEAD; when one did, gate only the components that change
-#          introduced. `reuse lint` always runs — a new file needs a header.
-#          Cheap enough for a per-commit hook on a big tree.
-#   auto   full when the CI env var is set, otherwise $LICENSING_LOCAL_MODE
-#          (default full — a full run is a few seconds).
-#
-# CACHING
-#   A full scan of a large tree is minutes — most of it syft indexing the
-#   filesystem, not reading licences — and almost every run scans a tree that is
-#   byte-for-byte what it was: the second `check` after fixing one thing,
-#   `download` straight after `check`, the pre-commit hook on the next commit.
-#   So the scan is cached, in two layers, under
-#   ${XDG_CACHE_HOME:-~/.cache}/licensing.sh (outside the repository, because an
-#   untracked file inside it is a file `reuse lint` fails on):
-#
-#     the whole inventory   keyed on the entire tree. Nothing changed since the
-#                           last run -> no syft at all.
-#     one worker's rows     keyed on ONE top-level directory. Removing a GPL
-#                           dependency changes the root lockfile and the root
-#                           node_modules and nothing about apps/ or backend/,
-#                           so only the trees that changed are scanned again.
-#
-#   A key covers everything that decides the answer: this script's version and
-#   its own checksum, syft's version (licence detection differs between
-#   releases, so upgrading syft invalidates every entry), the whole scan
-#   configuration, the CONTENT of every dependency manifest and lockfile, and
-#   the timestamp and entry count of every package directory and of the
-#   packages inside it. A worker keyed on a package directory ITSELF —
-#   node_modules, vendor — takes the manifests BESIDE it, since no lockfile
-#   lives inside one and its key would otherwise have nothing a dependency
-#   change could move. What no key can see is a change no manifest records — a
-#   file edited by hand inside node_modules — and
-#   --no-cache is the answer whenever a result looks stale. Entries unused for
-#   LICENSING_CACHE_MAX_AGE_DAYS are removed as they age out; LICENSING_CACHE=0
-#   turns the whole thing off.
-#
-#   LICENSING_IGNORE_PATHS is applied to the cached inventory rather than being
-#   part of the key, so deciding that something does not count costs a re-read
-#   and never a re-scan.
-#
-# CONFIGURATION
-#   .licensing.conf (sourced as bash) is mandatory and must define the policy
-#   lists LICENSING_ALLOW and LICENSING_DENY, which have no defaults. Every
-#   other knob is mechanism, has a documented default in the block below, and
-#   is overridden only when it differs.
-#   Those two are space-separated lists of single SPDX ids. A whole EXPRESSION
-#   — "BSD-3-Clause AND TCL", or a licence with an SPDX exception such as
-#   "GPL-2.0-only WITH Classpath-exception-2.0" — has a space in it and cannot
-#   go on either; LICENSING_ALLOW_EXPRESSIONS and LICENSING_DENY_EXPRESSIONS
-#   are arrays that take one. An expression is otherwise judged from its
-#   leaves: OR is a choice and passes if any branch is allowed, AND must
-#   satisfy every branch, and WITH is judged on the base licence, which is the
-#   conservative reading — an exception is a thing a policy opts into.
-#   LICENSING_SELF_NAMES takes this repository's own packages out of the gate;
-#   it matches the component NAME alone, across every ecosystem at once.
-#   --progress auto|on|off drives an OSC 9;4 progress bar — the taskbar/tab
-#   indicator Windows Terminal, ConEmu, WezTerm and Ghostty draw, and what
-#   mise uses. "auto" emits only for those terminals, because anything else
-#   would print the escape bytes; "on" forces it, "off" silences it — and
-#   --progress-test shows what your terminal actually does with it. Steps: the install
-#   preflight, the scan — one step per syft instance when it splits, so the
-#   bar moves as each worker finishes — each auxiliary cache read, and each
-#   half the run was asked for. A failed run leaves the bar in
-#   its error state before clearing it.
-#   --obligations prints, after the verdict, a duty x licence matrix for every
-#   licence the tree carries — every one of them, whatever this particular run
-#   gated: a delta run that scanned nothing still ships the components it did
-#   not look at, so the report reads the inventory itself when the gate did not
-#   hand it one. One row per duty (reproduce the notice, pass on a NOTICE file,
-#   offer source for the files you changed), one column per licence,
-#   alphabetical, with the component count underneath. It covers the
-#   ALLOWED licences too, because those are the ones you ship — a passing gate
-#   is exactly when nobody remembers that Apache-2.0 wants a NOTICE file.
-#   A cell reads "yes" (this licence puts you under this duty), blank (it does
-#   not), or "???" — nobody has answered for that licence at all, so every
-#   cell in its column says so and the ids are named again underneath. Blank
-#   and ??? are the distinction the whole report turns on: one is an answer.
-#   --components prints a block per licence instead: its duties spelled out,
-#   and the packages that put you under them, alphabetically. Pass both and
-#   you get both, the detail first and the matrix last — a summary belongs at
-#   the end of what it summarises.
-#
-#   EVERY component in the inventory appears somewhere in it, including the
-#   ones nothing could identify: those are listed under NOASSERTION, which is
-#   the sentinel for "no licence is stated anywhere the scan could look" and
-#   not a licence. That is mostly the packages a lockfile names but no install
-#   put on disk. They used to be left out of this report altogether, which made
-#   the components you most need to look at the ones you could not find.
-#
-#   Duties come from LICENSING_DUTIES (the fixed vocabulary the matrix rows
-#   are drawn from) and LICENSING_OBLIGATIONS (which of them each licence
-#   triggers). A licence with no entry is carried as "???" rather than as
-#   free, in the matrix and in the list of ids underneath it. The report reads three places, because a duty can arrive from any of
-#   them: the syft component scan (dependencies), the third-party annotations
-#   written by hand above REUSE.toml's marker, and the inline SPDX headers of
-#   tracked files outside the vendor roots. The last two are files copied INTO
-#   this repository — not components, and shipped all the same. Anything
-#   carrying LICENSING_LICENSE or LICENSING_DOC_LICENSE is this project's own
-#   outbound grant, not a duty, and is left out.
-#   Findings print as a table — STATUS, LICENCE, COMPONENT, PATH — coloured
-#   when stdout is a terminal. NO_COLOR turns that off, and
-#   LICENSING_COLOR=on|off|auto (or --color) settles it either way (on is for
-#   a log you will read back through a pager that understands escapes).
-#   --completion bash|zsh|fish prints a completion script on stdout, for the
-#   options and their values. `eval "$(licensing.sh --completion bash)"` in a
-#   shell rc file, or write it where your shell looks: a bash-completion
-#   directory, a directory on zsh's $fpath as _licensing, or
-#   ~/.config/fish/completions/licensing.fish. The option list is read out of
-#   this script's own argument parser, so it cannot fall behind it.
-#   Environment: LICENSING_CONF=<path> picks a different config file,
-#   LICENSING_DEBUG_DIR=<dir> keeps the raw scan and the generated REUSE.toml.
-#   --verbose (or LICENSING_VERBOSE=1) shows syft's own progress for a single
-#   scan, a line per worker as each finishes when the scan is split, the component
-#   count per type, the exact install commands, and the review-exempt
-#   components — use it when a run seems to have stopped: the scan of a large
-#   tree with node_modules installed genuinely takes minutes. What it does NOT
-#   change is how much of the ANSWER you get. Every failing component prints,
-#   on every run: LICENSING_MAX_FINDINGS is the only thing that can cap the
-#   list and it defaults to 0, which is all of them.
-#
-# OUTPUT
-#   A run that finds nothing wrong says nothing. Silence is the pass — the
-#   confirmations, the counts and the timings are all --verbose, because a
-#   pre-commit hook that prints eight lines per commit is eight lines nobody
-#   reads. What is left at the default level is what you have to act on: a
-#   failing gate, a warning, a file being written, a licence that could not be
-#   verified. Progress lines for something slow (a cold scan, the REUSE lint)
-#   print only when stderr is a terminal, and never under --porcelain, so a
-#   piped run and a parsed one both stay clean.
-#
-#   Everything above goes to STDOUT — the verdict, the findings table, the
-#   warnings and the --obligations report — because it is the answer somebody
-#   asked for, and an answer belongs where `> report.txt` and `| tee` can take
-#   it. Colour follows suit: it is on when STDOUT is a terminal, so a
-#   redirected report is plain text rather than a file full of escapes.
-#
-#   Three things stay on STDERR, and all three are the same kind of thing —
-#   not the answer: fatal errors (a missing policy file, a failed install, a
-#   dead scan worker), the progress lines for something slow, and the terminal
-#   progress bar. So `check --components > report.txt` still tells you at the
-#   terminal that the scan will take minutes, and does not put that line in
-#   report.txt.
-#
-#   Before 1.28.0 every one of those went to stderr under a single blanket
-#   rule, which meant `check --components | tee run.log` logged nothing at all.
-#   Under --porcelain it still holds: there the records own stdout and the
-#   human lines move to stderr, so a parser sees only records.
-#
-#   STDOUT carries the machine-readable report and nothing else, so
-#   `licensing.sh check --porcelain > out.tsv`
-#   yields a file with no prose in it. --porcelain prints one record per line,
-#   tab separated, first field the record type:
-#
-#     duty     <code> <what it obliges you to do>
-#     licence  <SPDX id> <components> <duty codes> <note>
-#     pair     <SPDX id> <component|file|annotation> <name> <version> <type>
-#     finding  <DENY|REVIEW> <type> <name> <version> <licences> <where>
-#     summary  <gated> <deny> <review> <exempt> <lockfile-only>
-#
-#   A licence with an empty duty-codes field asks nothing of you; one with "?"
-#   has nothing on file, which is a different answer. Ignore record types you
-#   do not know — new ones may appear — and pin the format with --porcelain=v1
-#   if you would rather be told than surprised. That is the whole feed behind
-#   "which components put me under the duty to reproduce a notice, grouped by
-#   licence": join `licence` rows carrying the duty to their `pair` rows.
-#
-# EXIT CODES
-#   0  everything passed
-#   1  policy violation: deny-listed or unreviewed licence, REUSE.toml drift,
-#      a file without SPDX info, or a licence text `download` could not fetch
-#   2  usage error, missing policy file, uninstalled dependencies, or a
-#      required tool is missing
-#
-# REQUIREMENTS
-#   bash 3.2+, git, and POSIX awk/sed/sort/diff/find/xargs — no GNU-only
-#   options, so a busybox CI image works — and both tools: syft for the
-#   dependency half, reuse for the file-licensing half. A missing tool is a
-#   hard error (exit 2), never a silent skip.
-#
-#   ECOSYSTEM SUPPORT. What syft can actually tell us differs per ecosystem:
-#     Go            components + licences      module cache or vendor/
-#     npm/yarn/pnpm components + licences      needs node_modules installed
-#     Python        components + licences      needs a virtualenv installed
-#     Maven         components + licences      resolved from ~/.m2 or the network
-#     Gradle        NOTHING without a lockfile  gradle.lockfile or built jars
-#     Dart/Flutter  components; licences only from ~/.pub-cache (aux scan)
-#     Rust          components; licences from the unpacked crate's Cargo.toml
-#     CocoaPods     components only — no licence data exists in syft today
-#     Swift PM      components only — same
-#     GitHub Actions components only — review-exempt by default
-#   For the "components only" rows, decide once: exempt the type in
-#   LICENSING_REVIEW_EXEMPT_TYPES (inventory, assert nothing) or review each
-#   package into .license-exceptions.txt — as `<name> = <SPDX id>` when you
-#   found its licence, which then counts as the component's licence everywhere
-#   this script reports one. The gate says so when it sees a type whose every
-#   component came back blank.
-#
-#   PER-ECOSYSTEM NOTES. Java/Kotlin: pom.xml is read directly and licences
-#   come from ~/.m2 or Maven Central (LICENSING_SYFT_ENV enables both) —
-#   nothing to install. Gradle needs a gradle.lockfile or built jars, or syft
-#   sees no Gradle dependency at all, so the preflight asks for one. Declared
-#   Java licence text ("Apache License, Version 2.0") is mapped to an SPDX id
-#   by LICENSING_LICENSE_ALIASES.
-#
-#   DUAL AND TRIPLE LICENCES. "(MIT OR GPL-3.0-or-later)" is a CHOICE, and a
-#   choice passes when either side does — taking MIT is a real option. Free
-#   text says the same thing in its own way: "GPL 2.0/LGPL 2.1", "Apache 2.0
-#   or BSD", "MIT, Apache-2.0". Each leaf is mapped through the alias table
-#   and the operators canonicalised, so the whole expression is judged rather
-#   than glob-matched as one string. A "or" that belongs to a licence's own
-#   NAME — "GNU Lesser General Public License v2 or later" — is left alone,
-#   because a split is only taken when every part is a licence we can name.
-#   A comma is read as a choice only while nothing in the list is deny-listed.
-#
-#   FREE TEXT AND THE FILE THAT SETTLES IT. A licence field is not obliged to
-#   hold an SPDX id, and plenty do not: "Mozilla Public License" with no
-#   version, npm's own "SEE LICENSE IN MY-LICENSE.md", a bare URL, a whole
-#   Python trove classifier, "???????". The alias table answers what it can
-#   (URLs and classifiers included). What it cannot, the package itself does:
-#   when NOTHING in a component's licence field names a licence, the licence
-#   TEXT the package ships is read and identified instead — the LICENSE beside
-#   the evidence. Nobody ships the wrong licence file, so the text wins over the
-#   prose, and "Mozilla Public License" comes back as the MPL-1.1 or MPL-2.0 it
-#   actually is.
-#
-#   "SEE LICENSE IN <file>" is resolved LEAF BY LEAF, whatever else the
-#   component declared, because npm names the file outright: "MIT OR SEE
-#   LICENSE IN FEEL-FREE.md" keeps its MIT and turns the other half into
-#   whatever FEEL-FREE.md says. When that file is a bespoke text no fingerprint
-#   matches, it still gets a NAME — LicenseRef-FEEL-FREE — because the file IS
-#   the licence, and a policy can be written against a LicenseRef and cannot be
-#   written against a sentence. (`download` will then ask you to put that text
-#   into LICENSES/ by hand, which is the correct thing for it to ask.) Only a
-#   file that is not on disk is left as prose: there is nothing to point at.
-#
-#   Where even that leaves a NAME with no version — "Mozilla Public License" in
-#   a package that ships no text — LICENSING_LICENSE_ALIASES_LAST holds the
-#   guesses, consulted only after everything else and never allowed to preempt
-#   a licence text.
-#
-#   Python is the awkward one: "Dual License" is a legal value of the
-#   License: field and names neither of the two. Placeholder values like that
-#   (UNKNOWN, None, see LICENSE, the pasted licence text) are treated as
-#   absent, and EVERY trove classifier is read instead and joined with OR —
-#   python-dateutil is Apache-2.0 OR BSD-3-Clause that way. It also means a
-#   package whose declared licence looks wrong is worth checking against the
-#   INSTALLED version: thefuzz is MIT from 0.22.1 and GPL-2.0 before it, and
-#   the version in the COMPONENT column is the one that was read.
-#
-#   IGNORING THINGS. Three knobs, in increasing order of bluntness.
-#   LICENSING_IGNORE_PATHS drops a component whose every evidence path matches
-#   a glob — the one to reach for when something in an installed tree is not
-#   really a dependency (a vendored .exe, a demo app), because it is applied to
-#   the scan rather than to syft and therefore costs no re-scan.
-#   LICENSING_EXCLUDE keeps the path out of the scan entirely, and
-#   LICENSING_IGNORE_TYPES drops a whole ecosystem; both change the scan, so
-#   both invalidate its cache.
-#   Separately, and on by default, LICENSING_SKIP_VENDORED_SUBPATHS drops npm
-#   components whose package.json sits where no package manager would have put
-#   one — a test fixture, a scaffolding template, a bundled copy inside another
-#   package. Those were never installed as dependencies, and the package that
-#   ships them is gated in its own right.
-#
-#   INSTALL DEPENDENCIES BEFORE RUNNING. A manifest or lockfile records
-#   versions, not licences — yarn.lock carries none at all — so licences are
-#   read from the packages on disk: node_modules, a virtualenv, vendor/, the Go
-#   module cache. Those trees are scanned even when .gitignore ignores them
-#   (LICENSING_INCLUDE_GITIGNORED). `check` refuses to scan an uninstalled tree
-#   (exit 2) and prints the install command; --auto-install runs it for you.
+# Exit codes
+#   0  passed
+#   1  policy violation: a denied or unreviewed licence, REUSE.toml drift, a
+#      file without SPDX information, or a licence text that could not be fetched
+#   2  usage error, missing policy file, uninstalled dependencies, or a missing
+#      tool (syft or reuse, through neither mise nor PATH)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -922,7 +484,10 @@ LICENSING_INCLUDE_GITIGNORED=("node_modules" "vendor" "site-packages" ".venv" "v
 #   <label>|<manifest glob>|<install paths, colon-separated>|<install command>
 # Install paths accept %GOMODCACHE% (`go env GOMODCACHE`), %POETRYENV%
 # (`poetry env info --path`) and %PUBCACHE% (~/.pub-cache), because those
-# package directories live outside the repository.
+# package directories live outside the repository. %CARGOCRATES% is stricter: it
+# holds only when EVERY registry crate in that Cargo.lock is unpacked under
+# LICENSING_CARGO_REGISTRY_SRC, where the crate licences are read. A registry
+# that merely exists proves nothing: any machine that ever built Rust has one.
 #
 # The command field may list ALTERNATIVES separated by ` || `, and the first
 # one whose tool is actually available wins. A leading NAME=value is allowed
@@ -946,6 +511,7 @@ LICENSING_INSTALL_CHECKS=(
   "python|requirements*.txt|.venv:venv:*/site-packages|uv venv && uv pip install -r %MANIFEST% || python3 -m venv .venv && .venv/bin/pip install -r %MANIFEST%"
   "python (pyproject)|pyproject.toml|.venv:venv:%POETRYENV%|uv sync || poetry install || uv tool run poetry install"
   "dart|pubspec.lock|.dart_tool:%PUBCACHE%|dart pub get || flutter pub get"
+  "rust|Cargo.lock|%CARGOCRATES%|cargo fetch"
   "ios (cocoapods)|Podfile.lock|Pods|pod install"
   "ios (swiftpm)|Package.resolved|.build/checkouts:SourcePackages|swift package resolve"
   "java (gradle)|build.gradle.kts|gradle.lockfile:gradle/dependency-locks:build/libs|./gradlew dependencies --write-locks || gradle dependencies --write-locks"
@@ -1069,7 +635,9 @@ LICENSING_INSTALL_CHECK=1
 
 # 1 = run the install command instead of stopping (also --auto-install). Off by
 # default: a gate should not mutate the tree it is gating without being asked.
-LICENSING_AUTO_INSTALL=0
+# Read from the environment too, so a CI job can turn it on for its own runs
+# without .licensing.conf turning it on for every developer.
+LICENSING_AUTO_INSTALL="${LICENSING_AUTO_INSTALL:-0}"
 
 # Components that ARE this project rather than a dependency of it: the Go main
 # module, the root npm package, every workspace of a monorepo, anything
@@ -1182,12 +750,13 @@ LICENSING_REVIEW_EXEMPT_TYPES=("github-action" "github-action-workflow")
 LICENSING_GITHUB_LICENCES=1
 LICENSING_GITHUB_API="https://api.github.com"
 
-# Directories holding third-party source that is COMMITTED to this repository.
-# For each component named N, an existing directory <root>/N gets a REUSE
-# annotation carrying its licence. A root git does not track (node_modules in
-# nearly every repository) is skipped: REUSE only ever looks at tracked files,
-# so annotating it would add thousands of blocks for files that are not here.
-LICENSING_VENDOR_ROOTS=("vendor" "node_modules" "third_party")
+# Directories holding third-party source that is COMMITTED to this repository:
+# vendor/ (go mod vendor, cargo vendor, Composer, Bundler's vendor/bundle),
+# node_modules, third_party/, and CocoaPods' and Carthage's checkouts. Each one
+# git tracks gets one REUSE annotation for all of it. A root git does not track
+# (node_modules in nearly every repository) gets none: REUSE only looks at
+# tracked files.
+LICENSING_VENDOR_ROOTS=("vendor" "node_modules" "third_party" "Pods" "Carthage")
 
 # Path globs that make a commit "dependency-affecting" in delta mode.
 LICENSING_TRIGGER_PATHS=(
@@ -1218,7 +787,7 @@ LICENSING_REUSE_TOML="REUSE.toml"
 # REUSE.toml is half hand-written, half generated. Everything ABOVE this marker
 # line is yours — first-party globs, in-tree third-party code — and is copied
 # through untouched; everything below is one annotation per vendored component,
-# rewritten by `licensing.sh fix` from the same scan the licence gate uses. A
+# rewritten by `licensing.sh download` from the same scan the licence gate uses. A
 # REUSE.toml without the marker is treated as fully hand-maintained and is only
 # linted, never rewritten.
 LICENSING_REUSE_MARKER="# --- generated by licensing.sh: vendored components (do not edit below) ---"
@@ -1266,7 +835,7 @@ LICENSING_LICENSE_SOURCES="reuse syft"
 # stays out too, so a free-text id syft could not map never becomes a "bad
 # license" in REUSE.toml.
 #
-# `fix` WRITES the file when one is needed and there is none — it cannot be
+# `download` WRITES the file when one is needed and there is none — it cannot be
 # empty, and it cannot be in LICENSES/: reuse reads everything in that
 # directory as a licence TEXT, so a notice file there comes back as
 # "Bad licenses: THIRD-PARTY-LICENSES" and justifies nothing. The generated
@@ -1282,21 +851,14 @@ LICENSING_LICENSE_SOURCES="reuse syft"
 # gets no notice file and no annotation at all, because it never had the
 # problem.
 #
-# ORDER, once there is one: the annotation is a reference like any other, so a
-# text that a REMOVED dependency left behind still looks used until REUSE.toml
-# is regenerated — `fix` before `download --fix`, not the other way round. A
-# plain `check` walks you through it anyway: the REUSE.toml drift is reported
-# before the lint and names `fix` itself.
+# ORDER: the annotation is a reference like any other, so a text that a REMOVED
+# dependency left behind looks used until REUSE.toml is regenerated. `download`
+# therefore regenerates it before it removes texts, and again after it fetches.
 #
 # Empty = never annotate and never write anything, for a repository that would
 # rather not keep the texts at all: LICENSING_LICENSE_SOURCES="reuse" and
 # `download --fix` then drop them instead of justifying them.
 LICENSING_NOTICE_FILE="THIRD-PARTY-LICENSES.md"
-
-# Expected syft version (bare "1.51.0"). Licence detection changes between
-# releases and REUSE.toml is generated from it, so a skew between a developer's
-# syft and CI's shows up as phantom drift. Empty = no check; a mismatch warns.
-LICENSING_SYFT_VERSION=""
 
 # Terminal progress via OSC 9;4 — the escape sequence Windows Terminal,
 # ConEmu, WezTerm and Ghostty turn into a taskbar/tab progress bar, and the
@@ -1314,9 +876,28 @@ LICENSING_LOCAL_MODE="full"
 # ---------------------------------------------------------------------------
 # plumbing
 # ---------------------------------------------------------------------------
-LICENSING_SH_VERSION="1.36.0"
 ME="$(basename "$0")"
+# The SPDX licence tag, put together from two pieces. reuse reads the literal tag
+# wherever it appears and honours REUSE-IgnoreStart/End only per 64 KiB chunk, so
+# a tag spelled out in this script's code could be read as a statement about
+# the script itself whenever an edit moves a chunk boundary next to it.
+SPDX_ID_TAG="SPDX-License-""Identifier:"
 SELF="$0"                 # how the caller invoked us, for copy-pasteable hints
+
+# The command a person should type to run `licensing.sh <args>`. Run as a
+# pre-commit hook (pre-commit sets PRE_COMMIT=1) the script lives in pre-commit's
+# cache under a hashed directory, so "$0 download" would name a path nobody can type
+# twice; the hook that runs the same command is the answer instead.
+how() { # how <licensing.sh args...> -> a command line
+  if [[ "${PRE_COMMIT:-}" != 1 ]]; then echo "${SELF} $*"; return 0; fi
+  case "$*" in
+    check|check\ *) echo "pre-commit run licensing --all-files" ;;
+    init)          echo "pre-commit run licensing-init --hook-stage manual" ;;
+    "download --fix") echo "pre-commit run licensing-download --hook-stage manual" ;;
+    sbom)          echo "pre-commit run licensing-sbom --hook-stage manual" ;;
+    *)             echo "pre-commit run licensing-cli --hook-stage manual (with args: [${*// /, }])" ;;
+  esac
+}
 # Where this file actually IS, resolved before the cd below, so the cache key
 # can include the script's own bytes. A version number is a promise somebody
 # has to remember to keep; the file's checksum is not, and an edited script
@@ -1327,6 +908,25 @@ case "$0" in
   *)  SELF_PATH="$PWD/$0" ;;
 esac
 [[ -r "$SELF_PATH" ]] || SELF_PATH=""
+
+# The version is the tag of the git checkout this file is in; no number is
+# written into the script. pre-commit runs a hook from a clone of the hooks
+# repository that holds no tags (it fetches the pinned rev alone), but records
+# the tag it fetched in FETCH_HEAD. Failing both, the commit; outside any git
+# checkout, "unknown".
+script_version() {
+  local d head fh tag
+  d="$(dirname "${SELF_PATH:-$0}")"
+  tag="$(git -C "$d" describe --tags --exact-match 2>/dev/null)" && { echo "$tag"; return 0; }
+  head="$(git -C "$d" rev-parse HEAD 2>/dev/null)" || { echo unknown; return 0; }
+  fh="$(git -C "$d" rev-parse --git-path FETCH_HEAD 2>/dev/null)"
+  case "$fh" in /*) ;; *) fh="$d/$fh" ;; esac
+  if [[ -f "$fh" ]]; then
+    tag="$(awk -v h="$head" '$1 == h && match($0, /tag \047[^\047]+\047/) { print substr($0, RSTART + 5, RLENGTH - 6); exit }' "$fh")"
+    [[ -n "$tag" ]] && { echo "$tag"; return 0; }
+  fi
+  git -C "$d" rev-parse --short HEAD
+}
 die()  { echo "$ME: $*" >&2; exit 2; }
 fail() { echo "$ME: $*" >&2; exit 1; }
 
@@ -1615,7 +1215,7 @@ mise_applies() { # mise_applies <dir>
 }
 
 missing_tool() {
-  fail "$1 not found, neither through mise nor on PATH. Pin it in mise.toml ([tools] ${2}) and run 'mise install', or install ${1} and put it on PATH."
+  die "$1 not found, neither through mise nor on PATH. Pin it in mise.toml ([tools] ${2}) and run 'mise install', or install ${1} and put it on PATH."
 }
 
 # Set by need_syft / need_reuse, used as "${SYFT[@]}" / "${REUSE[@]}".
@@ -1653,8 +1253,8 @@ EXTERNAL_LOCATIONS="${TMPDIR_RUN}/external"; : > "$EXTERNAL_LOCATIONS"
 # rather than through $( ) — a fork per component is minutes on a monorepo.
 LICFILE_OUT=""; WHERE_OUT=""; WHERE_ONE=""
 
-# The comment block at the top of this file IS the manual: print it verbatim,
-# minus the shebang and the SPDX header.
+# The comment block at the top of this file is the --help text: print it
+# verbatim, minus the shebang and the SPDX header. The manual is README.md.
 usage() {
   awk 'NR<=3 {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"
   exit "${1:-0}"
@@ -1662,7 +1262,7 @@ usage() {
 
 # The commands, options and option VALUES, in one place, so --completion and
 # the parser cannot drift apart: everything below is read from here.
-LICENSING_COMMANDS="check fix download sbom init"
+LICENSING_COMMANDS="check download sbom init"
 
 # The long options, read out of the parser below rather than listed here: a
 # second list is a second thing to forget, and the one that goes stale is
@@ -2526,11 +2126,24 @@ syft_version() {
   echo "$SYFT_VERSION_SEEN"
 }
 
-check_syft_version() {
-  [[ -n "$LICENSING_SYFT_VERSION" ]] || return 0
-  local got; got="$(syft_version)"
-  [[ "$got" == unknown || "$got" == "$LICENSING_SYFT_VERSION" ]] && return 0
-  note "warning: syft ${got} in use, policy expects ${LICENSING_SYFT_VERSION} — licence detection differs between releases, so REUSE.toml may show phantom drift. Pin it in mise.toml and run 'mise install'."
+# REUSE.toml's generated section is written from a syft scan, and licence
+# detection differs between syft releases. The syft that wrote it is recorded on
+# the line after the marker, so the file itself says what it was made with and
+# every machine reads the same answer. Any syft works: a different one is a
+# reason to expect drift, never a failure, and the stamp is left out of the
+# drift comparison.
+LICENSING_SYFT_STAMP="# generated with syft "
+
+toml_stamp() { # toml_stamp <file>: the syft version recorded in it, or nothing
+  sed -n "s/^${LICENSING_SYFT_STAMP}//p" "$1" | head -1
+}
+
+without_stamp() { grep -v "^${LICENSING_SYFT_STAMP}" "$1" || true; }
+
+warn_syft_changed() { # warn_syft_changed <REUSE.toml>
+  local was now; was="$(toml_stamp "$1")"; now="$(syft_version)"
+  [[ -z "$was" || "$now" == unknown || "$was" == "$now" ]] && return 0
+  note "warning: syft ${now} is in use and ${1} was generated with ${was}. Licence detection differs between releases; if the check below reports drift, run '$(how download --fix)' to regenerate it with this syft."
 }
 
 # ---------------------------------------------------------------------------
@@ -2684,7 +2297,7 @@ cargo_cache_lines() {
 # because licence detection differs between releases: upgrading syft must
 # invalidate every cached scan, or the upgrade would be invisible.
 cache_config_lines() {
-  echo "script=${LICENSING_SH_VERSION}/$(if [[ -n "$SELF_PATH" ]]; then cksum < "$SELF_PATH"; else echo "?"; fi) syft=$(syft_version)"
+  echo "script=$(if [[ -n "$SELF_PATH" ]]; then cksum < "$SELF_PATH"; else echo "?"; fi) syft=$(syft_version)"
   echo "target=${LICENSING_SCAN_TARGET}"
   echo "catalogers=${LICENSING_CATALOGERS}|${LICENSING_ADD_CATALOGERS[*]-}"
   echo "syftenv=${LICENSING_SYFT_ENV[*]-}"
@@ -2785,7 +2398,6 @@ cache_prune() {
 # passes none, which is not the same as the parameter being unused.
 scan_now() {
   need_syft
-  check_syft_version
 
   # The whole inventory, if nothing a scan reads has changed since last time.
   local scancache=""
@@ -2903,7 +2515,7 @@ scan_now() {
     # assignment, and `set -e` killed the run right here — silently, with the
     # scan finished and nothing written. `check` never showed it because
     # gate_deps is called as `gate_deps || rc=1`, which suspends errexit for
-    # everything underneath it; `fix` and `sbom` are not, so they died on every
+    # everything underneath it; `sbom` is not, so they died on every
     # tree big enough to be scanned in parallel.
     local failed=0 wf
     for wf in "${wdir}"/*.failed; do [[ -e "$wf" ]] && failed=$((failed + 1)); done
@@ -3241,8 +2853,8 @@ licence_from_text() { # licence_from_text <file>
 # it lists the licence file wherever the wheel put it, relative to the
 # directory the .dist-info itself is in.
 # owner/repo out of whatever shape the workflow wrote the action in:
-# "actions/checkout@v4", "https://github.com/jdx/mise-action@v2" (a Forgejo
-# workflow names the host), "github/codeql-action/analyze@v2" (an action in a
+# "actions/checkout@v4", "https://github.com/jdx/mise-action@v2" (some
+# workflow systems name the host), "github/codeql-action/analyze@v2" (an action in a
 # sub-directory — the licence belongs to the repository, not the folder).
 github_action_repo() { # github_action_repo <component name> -> owner/repo
   local n="$1" owner rest repo
@@ -3757,6 +3369,10 @@ any_populated() { # any_populated <manifest dir> <colon-separated paths>
   local IFS=':'
   for p in $paths_csv; do
     [[ -z "$p" ]] && continue
+    if [[ "$p" == %CARGOCRATES% ]]; then
+      cargo_crates_unpacked "$base" && return 0
+      continue
+    fi
     full="$(resolve_install_path "$p" "$base")"
     [[ -z "$full" ]] && continue
     case "$full" in
@@ -3768,20 +3384,40 @@ any_populated() { # any_populated <manifest dir> <colon-separated paths>
   return 1
 }
 
+# Is every registry crate a Cargo.lock names unpacked in the Cargo registry?
+# Git and path dependencies are not registry crates and are not looked for.
+cargo_crates_unpacked() { # cargo_crates_unpacked <manifest dir>
+  local lock="${1%/}/Cargo.lock" name ver
+  [[ -f "$lock" ]] || return 1
+  while IFS=' ' read -r name ver; do
+    [[ -n "$name" ]] || continue
+    compgen -G "${LICENSING_CARGO_REGISTRY_SRC}/*/${name}-${ver}" >/dev/null || return 1
+  done < <(awk '
+    /^\[\[package\]\]/ { if (n != "" && reg) print n, v; n = v = ""; reg = 0; next }
+    /^name = /    { n = $3; gsub(/"/, "", n) }
+    /^version = / { v = $3; gsub(/"/, "", v) }
+    /^source = "registry\+/ { reg = 1 }
+    END { if (n != "" && reg) print n, v }
+  ' "$lock")
+  return 0
+}
+
 # Human-readable list of the package directories that were looked at.
 display_paths() { # display_paths <manifest dir> <colon-separated paths>
   local base="$1" paths_csv="$2" p full acc=""
   local IFS=':'
   for p in $paths_csv; do
     [[ -z "$p" ]] && continue
+    if [[ "$p" == %CARGOCRATES% ]]; then
+      acc="${acc:+$acc, }${LICENSING_CARGO_REGISTRY_SRC} (some crates of Cargo.lock are not there)"
+      continue
+    fi
     full="$(resolve_install_path "$p" "$base")"
     if [[ -z "$full" ]]; then
-      case "$p" in *%GOMODCACHE%*) full="the Go module cache" ;;
-                   *%PUBCACHE%*)
-      [[ -d "${HOME}/.pub-cache/hosted" ]] && { echo "${HOME}/.pub-cache/hosted"; return; }
-      echo ""; return ;;
-    *%POETRYENV%*)  full="poetry's virtualenv" ;;
-                   *)              full="$p" ;; esac
+      case "$p" in *%GOMODCACHE%*)  full="the Go module cache" ;;
+                   *%PUBCACHE%*)    full="the pub cache (~/.pub-cache)" ;;
+                   *%POETRYENV%*)   full="poetry's virtualenv" ;;
+                   *)               full="$p" ;; esac
     fi
     acc="${acc:+$acc, }${full#./}"
   done
@@ -4407,7 +4043,7 @@ reuse_head_licences() { # -> <component>TAB<licence expression> lines
 #
 # Third-party files copied into this repository that carry their own inline
 # SPDX header, rather than being annotated in REUSE.toml. A vendored .c file
-# with "SPDX-License-Identifier: GPL-2.0-only" at the top is not a component,
+# with an SPDX licence tag naming GPL-2.0-only at the top is not a component,
 # is not an annotation, and ships anyway — it is the last place an obligation
 # can hide.
 #
@@ -4424,22 +4060,22 @@ inline_spdx_licences() { # -> <component>TAB<licence expression> lines
   # No \b: git grep's regex engine does not know it, and a pattern it cannot
   # compile silently matches nothing. Exit 1 means "no matches", which is a
   # perfectly good answer and must not take `set -e` with it.
-  git grep -I -E 'SPDX-License-Identifier:' -- . ${excludes[@]+"${excludes[@]}"} 2>/dev/null \
-    | awk -v own="$LICENSING_LICENSE" -v owndoc="$LICENSING_DOC_LICENSE" '
+  git grep -I -E "$SPDX_ID_TAG" -- . ${excludes[@]+"${excludes[@]}"} 2>/dev/null \
+    | awk -v tag="$SPDX_ID_TAG" -v own="$LICENSING_LICENSE" -v owndoc="$LICENSING_DOC_LICENSE" '
       {
         i = index($0, ":")
         if (i == 0) next
         path = substr($0, 1, i - 1)
         if (path in seen) next
         rest = substr($0, i + 1)
-        j = index(rest, "SPDX-License-Identifier:")
+        j = index(rest, tag)
         if (j == 0) next
-        # Only comment punctuation may precede the tag. `const hdr =
-        # "SPDX-License-Identifier: LGPL-3.0-only"` is a source-code literal,
+        # Only comment punctuation may precede the tag. A tag inside a string
+        # (`const hdr = "<tag> LGPL-3.0-only"`) is a source-code literal,
         # not a declaration about the file it sits in, and the letters and the
         # quote in front of the tag are what say so.
         if (substr(rest, 1, j - 1) ~ /[A-Za-z0-9"\047]/) next
-        id = substr(rest, j + length("SPDX-License-Identifier:"))
+        id = substr(rest, j + length(tag))
         # Trim the whitespace, then whatever the comment syntax put after it.
         sub(/^[ \t]+/, "", id)
         sub("[ \t]*(\\*/|-->|#|\"|\047|,).*$", "", id)
@@ -4972,22 +4608,6 @@ reuse_head() {
   awk -v m="$LICENSING_REUSE_MARKER" '$0==m {exit} {print}' "$LICENSING_REUSE_TOML"
 }
 
-# licence expression for a component: allow-listed ids only, sorted, AND-joined
-expr_for() {
-  local lics="$1" l out=""
-  out="$(local IFS=';'
-    for l in $lics; do
-      [[ -z "$l" || "$l" == sha256:* ]] && continue
-      unset IFS
-      l="$(normalize_lic "$l")"
-      in_list "$l" " $LICENSING_ALLOW " && echo "$l"
-      IFS=';'
-    done | sort -u | paste -sd'~' - | tr '~' '\n' | paste -sd' ' -)"
-  out="${out// / AND }"
-  [[ -z "$out" ]] && out="LicenseRef-vendored"
-  echo "$out"
-}
-
 # An expression, one id per line.
 expr_leaves() { # expr_leaves  (reads stdin)
   awk '{ e = $0; gsub(/[()]/, " ", e); gsub(/ OR /, "\n", e); gsub(/ AND /, "\n", e); print e }' \
@@ -5057,7 +4677,7 @@ write_notice_file() {
     # the file's licensing information, which is enough for the lint and
     # avoids inventing an outbound licence for a document that collects
     # somebody else's.
-    [[ -n "$lic" ]] && echo "SPDX-License-Identifier: ${lic}"
+    [[ -n "$lic" ]] && echo "${SPDX_ID_TAG} ${lic}"
     echo "-->"
     echo
     echo "# Third-party licences"
@@ -5070,9 +4690,9 @@ write_notice_file() {
     echo "For which component is under which licence, and what each licence asks of"
     echo "you:"
     echo
-    echo "    ${SELF} check --obligations --components"
+    echo "    ${ME} check --obligations --components"
     echo
-    echo "Both this file and that list are maintained by \`${SELF} fix\`."
+    echo "Both this file and that list are maintained by \`${ME} download\`."
   } > "$LICENSING_NOTICE_FILE"
   note "wrote ${LICENSING_NOTICE_FILE} — the document that accounts for the dependency licence texts in ${LICENSING_LICENSES_DIR}/. Commit it; edit it freely, it is never rewritten."
   return 0
@@ -5084,8 +4704,14 @@ write_notice_file() {
 notice_annotation() { # notice_annotation <expression>
   local expr="$1"
   [[ -n "$LICENSING_NOTICE_FILE" && -n "$expr" ]] || return 0
+  if [[ ! -f "$LICENSING_NOTICE_FILE" && "$CMD" == download ]]; then
+    # Only a dry run gets here: a real download writes the file first.
+    [[ -n "${NOTICE_DRY_NOTED:-}" ]] || note "download: would write ${LICENSING_NOTICE_FILE}"
+    NOTICE_DRY_NOTED=1
+    return 0
+  fi
   if [[ ! -f "$LICENSING_NOTICE_FILE" ]]; then
-    note "warning: ${LICENSING_NOTICE_FILE} does not exist, so ${LICENSING_LICENSES_DIR}/ holds licence texts nothing in the tree accounts for and 'reuse lint' fails on them. Run '${SELF} fix' to write it, or clear LICENSING_NOTICE_FILE and drop the texts with 'download --fix' instead."
+    note "warning: ${LICENSING_NOTICE_FILE} does not exist, so ${LICENSING_LICENSES_DIR}/ holds licence texts nothing in the tree accounts for and 'reuse lint' fails on them. Run '$(how download --fix)' to write it, or clear LICENSING_NOTICE_FILE and drop the texts with 'download --fix' instead."
     return 0
   fi
   vnote "notice file: ${LICENSING_NOTICE_FILE} accounts for $(echo "$expr" | expr_leaves | wc -l | tr -d ' ') dependency licence(s)"
@@ -5097,29 +4723,46 @@ notice_annotation() { # notice_annotation <expression>
   return 0
 }
 
-# One [[annotations]] block per vendored component, from the same scan.
+# One [[annotations]] block per vendor root git tracks. REUSE needs licensing
+# information for every committed file, and vendored files carry no SPDX header
+# of this project's. The real licence of each package is checked from the
+# component scan and listed in the SBOM; here the root is covered as a whole, so
+# REUSE.toml stays the same whatever a given syft version reports.
+LICENSING_VENDOR_LICENCE="LicenseRef-vendored-packages"
 vendor_annotations() {
-  local root type name ver path lics
+  local root
   for root in "${LICENSING_VENDOR_ROOTS[@]}"; do
-      [[ -d "$root" ]] || continue
-      # REUSE only ever looks at files git tracks, so an ignored tree needs no
-      # annotations. node_modules is ignored in nearly every repository:
-      # annotating it would add thousands of blocks describing files that are
-      # not in the repository at all.
-      if [[ -z "$(git ls-files -- "$root" | head -1)" ]]; then
-        vnote "vendor root ${root} holds no tracked files — no annotations needed"
-        continue
-      fi
-      local seen=" "
-      while IFS='|' read -r type name ver path lics; do
-        [[ -d "${root}/${name}" ]] || continue
-        case "$seen" in *" ${name} "*) continue ;; esac
-        seen="${seen}${name} "
-        printf '\n[[annotations]]\npath = "%s/%s/**"\nSPDX-FileCopyrightText = "The %s authors"\nSPDX-License-Identifier = "%s"\n' \
-          "$root" "$name" "$name" "$(expr_for "$lics")"
-      done < <(LC_ALL=C sort -t'|' -k2,2 "$SCAN")
+    [[ -d "$root" ]] || continue
+    # REUSE only ever looks at files git tracks, so an ignored tree (node_modules
+    # in nearly every repository) needs no annotation.
+    if [[ -z "$(git ls-files -- "$root" | head -1)" ]]; then
+      vnote "vendor root ${root} holds no tracked files — no annotation needed"
+      continue
+    fi
+    printf '\n[[annotations]]\npath = "%s/**"\nSPDX-FileCopyrightText = "The authors of each package in %s/"\nSPDX-License-Identifier = "%s"\n' \
+      "$root" "$root" "$LICENSING_VENDOR_LICENCE"
   done
   return 0
+}
+
+# The text behind that id, written by `download` once and never rewritten.
+write_vendor_licence() {
+  local f="${LICENSING_LICENSES_DIR}/${LICENSING_VENDOR_LICENCE}.txt"
+  [[ -e "$f" ]] && return 0
+  mkdir -p "$LICENSING_LICENSES_DIR"
+  cat > "$f" <<EOF
+${LICENSING_VENDOR_LICENCE}
+$(printf '%s' "$LICENSING_VENDOR_LICENCE" | tr '[:print:]' '=')
+
+This is not a licence. It marks third-party code committed to this repository,
+in the directories REUSE.toml annotates with it. Each package there keeps its
+own licence, stated in the package's own files.
+
+Those licences are checked by licensing.sh against .licensing.conf on every
+commit, and listed per package in the SBOM it writes (licensing.sh sbom) and in
+its obligations report (licensing.sh check --obligations).
+EOF
+  note "wrote ${f}"
 }
 
 gen_toml() { # gen_toml <out file> [create-notice]
@@ -5129,12 +4772,14 @@ gen_toml() { # gen_toml <out file> [create-notice]
   # NOT have to claim, so they have to exist before the question is asked.
   vendor_annotations > "$vend"
   expr="$(notice_licence_expr "$vend")"
-  # `fix` may write the file; `check` may not — it reports and gates, it does
+  # `download` may write the file; `check` may not — it reports and gates, it does
   # not mutate the tree it is gating.
   [[ -n "$expr" && "${2:-}" == create-notice && -n "$LICENSING_NOTICE_FILE" ]] && write_notice_file
+  [[ -s "$vend" && "${2:-}" == create-notice ]] && write_vendor_licence
   {
     reuse_head
     echo "$LICENSING_REUSE_MARKER"
+    echo "${LICENSING_SYFT_STAMP}$(syft_version)"
     notice_annotation "$expr"
     cat "$vend"
   } > "$out"
@@ -5145,22 +4790,38 @@ check_toml() {
   local gen="${TMPDIR_RUN}/REUSE.toml.gen"
   gen_toml "$gen"
   [[ -n "${LICENSING_DEBUG_DIR:-}" ]] && cp "$gen" "${LICENSING_DEBUG_DIR}/REUSE.gen"
-  if [[ ! -f "$LICENSING_REUSE_TOML" ]] || ! diff -q "$LICENSING_REUSE_TOML" "$gen" >/dev/null; then
+  [[ -f "$LICENSING_REUSE_TOML" ]] && warn_syft_changed "$LICENSING_REUSE_TOML"
+  without_stamp "$gen" > "${gen}.cmp"
+  without_stamp "$LICENSING_REUSE_TOML" > "${TMPDIR_RUN}/REUSE.toml.cur" 2>/dev/null || true
+  if [[ ! -f "$LICENSING_REUSE_TOML" ]] || ! diff -q "${TMPDIR_RUN}/REUSE.toml.cur" "${gen}.cmp" >/dev/null; then
     echo "✗ ${LICENSING_REUSE_TOML} is out of date with the component scan:" >&3
-    diff -u "$LICENSING_REUSE_TOML" "$gen" 2>/dev/null | head -40 >&3 || true
+    diff -u "${TMPDIR_RUN}/REUSE.toml.cur" "${gen}.cmp" 2>/dev/null | head -40 >&3 || true
     echo >&3
-    echo "Run: ${SELF} fix" >&3
+    echo "Run: $(how download --fix)" >&3
     return 1
   fi
   snote "toml: ✓ ${LICENSING_REUSE_TOML} matches the component scan ($(grep -c '^\[\[annotations\]\]' "$LICENSING_REUSE_TOML") annotation blocks)"
 }
 
-fix_toml() {
-  toml_enabled || die "cannot fix: ${LICENSING_REUSE_TOML} has no marker line — add it where the generated section should start:\n  ${LICENSING_REUSE_MARKER}"
+# Bring the generated section of REUSE.toml up to date. `download` runs this, so
+# the licence texts in LICENSES/ and the annotations that account for them are
+# maintained by one command. A REUSE.toml with no marker line is hand-maintained
+# and left alone; --dry-run only says whether it would change.
+sync_toml() {
+  toml_enabled || { vnote "toml: ${LICENSING_REUSE_TOML} has no marker line — hand-maintained, left as it is"; return 0; }
   local gen="${TMPDIR_RUN}/REUSE.toml.gen"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    gen_toml "$gen"
+    # download runs this twice; say it once.
+    if [[ -z "${TOML_DRY_NOTED:-}" ]] && ! diff -q "$LICENSING_REUSE_TOML" "$gen" >/dev/null 2>&1; then
+      note "download: would update ${LICENSING_REUSE_TOML}"; TOML_DRY_NOTED=1
+    fi
+    return 0
+  fi
   gen_toml "$gen" create-notice
+  diff -q "$LICENSING_REUSE_TOML" "$gen" >/dev/null 2>&1 && return 0
   cp "$gen" "$LICENSING_REUSE_TOML"
-  note "toml: wrote ${LICENSING_REUSE_TOML} ($(grep -c '^\[\[annotations\]\]' "$LICENSING_REUSE_TOML") annotation blocks)"
+  note "download: updated ${LICENSING_REUSE_TOML} ($(grep -c '^\[\[annotations\]\]' "$LICENSING_REUSE_TOML") annotation blocks)"
 }
 
 # ---------------------------------------------------------------------------
@@ -5184,8 +4845,8 @@ LICENSING_LINT_MAX_FILES=200
 LICENSING_LINT_CATEGORIES=(
   "missing_licensing_info|files with no licence information|add an inline SPDX-License-Identifier header, or a REUSE.toml annotation above the marker"
   "missing_copyright_info|files with no copyright information|add an inline SPDX-FileCopyrightText header, or a REUSE.toml annotation above the marker"
-  "missing_licenses|licences referred to but absent from ${LICENSING_LICENSES_DIR}/|${SELF} download --all"
-  "unused_licenses|licence texts in ${LICENSING_LICENSES_DIR}/ that nothing refers to|${SELF} fix first (its annotation is a reference), then ${SELF} download --fix"
+  "missing_licenses|licences referred to but absent from ${LICENSING_LICENSES_DIR}/|$(how download --all)"
+  "unused_licenses|licence texts in ${LICENSING_LICENSES_DIR}/ that nothing refers to|$(how download --fix)"
   "bad_licenses|licence ids SPDX does not recognise|fix the id, or map it in LICENSING_LICENSE_ALIASES"
   "deprecated_licenses|licence ids SPDX has deprecated|replace with the current id (GPL-2.0 -> GPL-2.0-only, and so on)"
   "licenses_without_extension|licence texts whose file name has no .txt|rename them to <SPDX-ID>.txt"
@@ -5222,7 +4883,7 @@ lint_files() {
       echo
       echo "  A REUSE.toml that will not parse is the usual cause — the message above"
       echo "  names the line. Everything ABOVE the marker line is hand-written, so that"
-      echo "  is where to look; ${SELF} fix regenerates only what is below it."
+      echo "  is where to look; $(how download --fix) regenerates only what is below it."
     } >&3
     return 1
   fi
@@ -5274,7 +4935,7 @@ lint_files() {
     done < "$counts"
     echo
     [[ -z "${LICENSING_VERBOSE:-}" ]] && echo "  --verbose lists the files under each. So does '${REUSE[*]} lint'."
-    echo "  New third-party or vendored code?  ->  ${SELF} fix"
+    echo "  New third-party or vendored code?  ->  $(how download --fix)"
     echo "  First-party source or doc?         ->  add an inline SPDX header"
   } >&3
   return 1
@@ -5527,7 +5188,7 @@ emit_sbom() {
   ns="https://spdx.org/spdxdocs/${name}-$(printf '%s' "${REPO_ROOT}${created}" | digest)"
 
   awk -F'\t' -v created="$created" -v ns="$ns" -v docname="$name" \
-      -v tool="licensing.sh-${LICENSING_SH_VERSION}" -v syftv="$(syft_version)" '
+      -v tool="licensing.sh-$(script_version)" -v syftv="$(syft_version)" '
     function esc(s,   t) {
       t = s
       gsub(/\\/, "\\\\", t); gsub(/"/, "\\\"", t)
@@ -5646,7 +5307,7 @@ write_template() {
     return 0
   fi
   cat > "$CONF" <<'TEMPLATE'
-# Licensing policy for this repository — read by scripts/licensing.sh.
+# Licensing policy for this repository — read by licensing.sh.
 #
 # The script ships NO licence policy of its own and will not run without this
 # file. A licence policy is a statement about what this product may absorb, so
@@ -5654,8 +5315,9 @@ write_template() {
 # request, never inherited from whatever version of a script happens to be
 # installed.
 #
-# Sourced as bash. Only the two lists below are mandatory; every other knob is
-# mechanism and has a documented default in the script.
+# Sourced as bash. Only the two lists below are mandatory; every other setting
+# has a default, documented in README.md of
+# https://github.com/bokysan/pre-commit-hooks.
 #
 # Verdict order per component: DENY beats everything, then ALLOW, then
 # .license-exceptions.txt, then REVIEW (fail). A licence on both lists is
@@ -5757,7 +5419,6 @@ LICENSING_DENY=(
 
 # --- optional: uncomment what differs from the documented defaults ----------
 # LICENSING_SCAN_TARGET="dir:."           # or "file:go.mod", "dir:src", …
-# LICENSING_SYFT_VERSION="1.51.0"         # warn when a different syft is used
 # LICENSING_SELF_NAMES=("github.com/you/project")  # this project, not a dep
 # LICENSING_EXCEPTIONS=".license-exceptions.txt"
 # LICENSING_EXCLUDE=("./testdata/**")     # extra syft --exclude globs
@@ -5771,7 +5432,7 @@ LICENSING_DENY=(
 #                                         # drop syft if you do not vendor
 # LICENSING_NOTICE_FILE="THIRD-PARTY-LICENSES.md"  # the document that accounts
 #                                         # for the dependency licence texts;
-#                                         # `fix` writes it when one is needed.
+#                                         # `download` writes it when needed.
 #                                         # "" = never; drop the texts instead
 # LICENSING_LOCAL_MODE="full"             # mode for `--mode auto` outside CI
 # LICENSING_SCAN_JOBS="auto"              # parallel syft workers; 1 = one scan
@@ -5791,10 +5452,21 @@ LICENSING_DENY=(
 
 # REUSE.toml is edited in place, not generated from here: write your own
 # annotations at the top of it, then put the marker line above where the
-# vendored-component section should go. `licensing.sh fix` rewrites everything
+# vendored-component section should go. `licensing.sh download` rewrites everything
 # below the marker and leaves everything above it alone. No marker = the file
 # is hand-maintained and only linted.
 TEMPLATE
+  # The identity `init` was given (environment, see the init branch below) is
+  # written in as real settings: `download` and `check` use it on every run, so
+  # it cannot live only in the environment of the one run that seeded the tree.
+  local k v
+  for k in LICENSING_COPYRIGHT LICENSING_LICENSE LICENSING_DOC_LICENSE; do
+    v="${!k}"
+    [[ -n "$v" ]] || continue
+    awk -v k="$k" -v v="$v" '
+      !done && index($0, "# " k "=") == 1 { print k "=\"" v "\""; done = 1; next } { print }
+    ' "$CONF" > "${CONF}.new" && mv "${CONF}.new" "$CONF"
+  done
   note "wrote ${CONF}"
 }
 
@@ -5814,7 +5486,7 @@ write_reuse_toml() {
   local holder lic doclic
   holder="$LICENSING_COPYRIGHT"
   if [[ -z "$holder" ]]; then
-    holder="$(git config user.name 2>/dev/null)"
+    holder="$(git config user.name 2>/dev/null || true)"
     [[ -z "$holder" ]] && holder="<COPYRIGHT HOLDER>"
     holder="$(date +%Y) ${holder}"
   fi
@@ -5830,7 +5502,7 @@ version = 1
 # the file when someone copies it out of this repository.
 #
 # Hand-written above the marker line; everything below it is written by
-# \`${SELF} fix\` from the component scan. Do not edit below the marker.
+# \`${ME} download\` from the component scan. Do not edit below the marker.
 #
 # Any <SPDX-…> placeholder below must be replaced: \`reuse lint\` fails until
 # the ids are real (deliberate — a wrong-but-valid default would lint green
@@ -5878,7 +5550,7 @@ EOF
 
 # REUSE-IgnoreStart — the heredoc below WRITES an SPDX header, one tag per
 # line, and `reuse lint` reads a tag wherever it finds one: without these
-# markers the template's own "SPDX-License-Identifier: ${LICENSING_LICENSE...}"
+# markers the template's own licence tag with "${LICENSING_LICENSE...}" in it
 # is read as this script's licence, and an unexpanded shell parameter is not an
 # SPDX expression. The lint then fails on the file whose whole job is to run it.
 #
@@ -5896,16 +5568,16 @@ write_exceptions_file() {
   local holder
   holder="$LICENSING_COPYRIGHT"
   if [[ -z "$holder" ]]; then
-    holder="$(git config user.name 2>/dev/null)"
+    holder="$(git config user.name 2>/dev/null || true)"
     [[ -z "$holder" ]] && holder="<COPYRIGHT HOLDER>"
     holder="$(date +%Y) ${holder}"
   fi
   cat > "$LICENSING_EXCEPTIONS" <<EOF
 # SPDX-FileCopyrightText: ${holder}
-# SPDX-License-Identifier: ${LICENSING_LICENSE:-<SPDX-LICENSE-ID>}
+# ${SPDX_ID_TAG} ${LICENSING_LICENSE:-<SPDX-LICENSE-ID>}
 #
 # Dependency licences reviewed BY HAND and found acceptable — read by
-# ${SELF}.
+# ${ME}.
 #
 # An entry here exempts one component from the REVIEW failure: the case where
 # a licence could not be mapped to an id your policy names, and a person has
@@ -5966,9 +5638,10 @@ init_repo() {
 Next:
   1. edit ${CONF##*/} — set LICENSING_ALLOW / LICENSING_DENY
   2. edit ${LICENSING_REUSE_TOML} — replace the <SPDX-…> placeholders
-  3. run  ${SELF} fix — fill in the vendored-component annotations
-  4. run  ${SELF} check — run the gate
-  5. wire the pre-commit hook and the CI job — see ${SELF} --help, step 5
+  3. run  $(how download --fix) — fetch the licence texts and fill in REUSE.toml
+  4. run  $(how check) — run the gate
+  5. add the licensing hook to .pre-commit-config.yaml and to CI — see README.md in
+     https://github.com/bokysan/pre-commit-hooks
 EOF
 }
 
@@ -5979,9 +5652,9 @@ CMD="check"; MODE="auto"; ONLY="deps,toml,lint"; SBOM_OUT=""; AUTO_INSTALL=""; S
 OBLIGATIONS=0; OBLIGATION_MATRIX=0; OBLIGATION_COMPONENTS=0; LIC_SEEN_FILE=""
 DOWNLOAD_WHAT="all"; DRY_RUN=0; PORCELAIN=0
 case "${1:-}" in
-  check|fix|download|sbom|init) CMD="$1"; shift ;;
+  check|download|sbom|init) CMD="$1"; shift ;;
   -h|--help) usage 0 ;;
-  -V|--version) echo "$(basename "$0") ${LICENSING_SH_VERSION}"; exit 0 ;;
+  -V|--version) echo "${ME} $(script_version)"; exit 0 ;;
   --progress-test) progress_test; exit 0 ;;
   --completion) completion_script "${2:?--completion needs a shell (${LICENSING_VALUES_completion})}"; exit 0 ;;
   --completion=*) completion_script "${1#*=}"; exit 0 ;;
@@ -6020,7 +5693,7 @@ while [[ $# -gt 0 ]]; do
     --color) LICENSING_COLOR="${2:?}"; shift 2 ;;
     --color=*) LICENSING_COLOR="${1#*=}"; shift ;;
     -h|--help) usage 0 ;;
-    -V|--version) echo "${ME} ${LICENSING_SH_VERSION}"; exit 0 ;;
+    -V|--version) echo "${ME} $(script_version)"; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -6046,7 +5719,7 @@ ${ME}: no policy file at ${CONF}.
 This script ships no licence policy of its own: what a product may absorb is
 written down in the repository it governs. Create one with
 
-  ${SELF} init
+  $(how init)
 
 then edit LICENSING_ALLOW / LICENSING_DENY in it. Point elsewhere with
 LICENSING_CONF=<path>.
@@ -6056,8 +5729,8 @@ fi
 # The config is SOURCED, so a file that is secretly a copy of this script
 # re-runs main from inside itself, forever, printing nothing — the recursion
 # happens before the first line of output. Cheap to spot, so spot it.
-if head -1 "$CONF" | grep -q '^#!' || grep -q '^LICENSING_SH_VERSION=' "$CONF"; then
-  die "${CONF##*/} looks like a copy of ${ME}, not a policy file. It is sourced as bash, so this would recurse into itself with no output. The policy file holds only LICENSING_* settings — see '${SELF} init'."
+if head -1 "$CONF" | grep -q '^#!' || grep -q '^script_version()' "$CONF"; then
+  die "${CONF##*/} looks like a copy of ${ME}, not a policy file. It is sourced as bash, so this would recurse into itself with no output. The policy file holds only LICENSING_* settings — see '$(how init)'."
 fi
 # shellcheck disable=SC1090
 . "$CONF"
@@ -6071,7 +5744,7 @@ for k in $LICENSING_REQUIRED_KEYS; do
   declare -p "$k" >/dev/null 2>&1 || missing="${missing} ${k}"
 done
 if [[ -n "$missing" ]]; then
-  die "${CONF##*/} does not define:${missing}. These carry policy, so they have no default — set them explicitly (${SELF} init writes a strict starting point)."
+  die "${CONF##*/} does not define:${missing}. These carry policy, so they have no default — set them explicitly ($(how init) writes a strict starting point)."
 fi
 for k in $LICENSING_REQUIRED_KEYS; do normalize_policy_list "$k"; done
 
@@ -6092,15 +5765,21 @@ if [[ "$PORCELAIN" == 1 ]]; then OBLIGATIONS=1; LICENSING_COLOR=off; exec 3>&2; 
 [[ -n "$PROGRESS_OVERRIDE" ]] && LICENSING_PROGRESS="$PROGRESS_OVERRIDE"
 
 if [[ "$CMD" == download ]]; then
+  need_syft
+  need_reuse || missing_tool reuse '"pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }'
+  # REUSE.toml first, so a dropped dependency's licence is no longer claimed and
+  # --fix can remove its text; then again, so the texts just fetched are claimed.
+  sync_toml
   dlrc=0
   cmd_download "$DOWNLOAD_WHAT" || dlrc=$?
+  sync_toml
   exit "$dlrc"
 fi
 # --all / --fix / --dry-run steer `download` and nothing else. Silently
 # ignoring one on `check` would read as "I asked for a dry run and it wrote
 # anyway", which is the report nobody wants to have to make.
 if [[ "$DOWNLOAD_WHAT" != all || "$DRY_RUN" == 1 ]]; then
-  die "--all / --fix / --dry-run belong to '${SELF} download', not to '${CMD}'"
+  die "--all / --fix / --dry-run belong to '$(how download)', not to '${CMD}'"
 fi
 
 [[ "$CMD" == sbom ]] && { emit_sbom "$SBOM_OUT"; exit 0; }
@@ -6125,10 +5804,6 @@ if wants lint && [[ "$LICENSING_REUSE" != 0 ]]; then
 fi
 
 rc=0
-if [[ "$CMD" == fix ]]; then
-  fix_toml
-  MODE=full
-fi
 
 snote "mode=${MODE} target=${LICENSING_SCAN_TARGET}"
 
