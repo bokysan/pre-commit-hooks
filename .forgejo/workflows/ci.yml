@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Bojan Čekrlić
+# SPDX-License-Identifier: MPL-2.0
+name: CI
+
+# Forgejo wrapper. Forgejo reads only .forgejo/workflows once it exists, so the
+# job logic lives in .github/workflows/ci.yml and is called here. Edit that file;
+# only the triggers are mirrored.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml

@@ -1,0 +1,43 @@
+- id: licensing
+  name: licensing gate (syft dependencies + REUSE files, one scan)
+  description: >-
+    Every third-party component in the tree carries a licence your outbound
+    licence can absorb, REUSE.toml's vendored annotations match that scan, and
+    every file carries SPDX copyright + licensing info (`reuse lint`). Needs
+    syft and reuse, through mise or on PATH, and a .licensing.conf policy file.
+  entry: licensing.sh check --mode auto
+  language: script
+  always_run: true
+  pass_filenames: false
+
+# The commands below are run on demand, never on commit:
+#   pre-commit run licensing-fix --hook-stage manual --all-files
+# They edit files (REUSE.toml, LICENSES/) or write one (sbom.spdx.json), which is
+# why they are in the manual stage. `init` and any other flag combination: see
+# the README, "Running the other commands".
+- id: licensing-fix
+  name: licensing fix (regenerate REUSE.toml's vendored section)
+  description: Rewrites the generated section of REUSE.toml from a fresh scan, then runs the full check.
+  entry: licensing.sh fix
+  language: script
+  stages: [manual]
+  always_run: true
+  pass_filenames: false
+
+- id: licensing-download
+  name: licensing download (fetch missing LICENSES/ texts, drop unused ones)
+  description: Fetches the missing licence texts into LICENSES/ and removes the ones nothing uses.
+  entry: licensing.sh download --fix
+  language: script
+  stages: [manual]
+  always_run: true
+  pass_filenames: false
+
+- id: licensing-sbom
+  name: licensing sbom (write sbom.spdx.json)
+  description: Writes an SPDX 2.3 JSON SBOM from the same inventory the gate checks.
+  entry: licensing.sh sbom
+  language: script
+  stages: [manual]
+  always_run: true
+  pass_filenames: false

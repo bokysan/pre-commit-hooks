@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Bojan Čekrlić
+# SPDX-License-Identifier: MPL-2.0
+#
+# Dependency licences reviewed BY HAND and found acceptable — read by
+# licensing.sh.
+#
+# An entry here exempts one component from the REVIEW failure: the case where
+# a licence could not be mapped to an id your policy names, and a person has
+# since read it and decided it is fine. It NEVER exempts a deny-listed
+# licence — those fail whatever this file says, because the point of a deny
+# list is that no single reviewer overrides it.
+#
+# Reach for this LAST. A licence that keeps coming back is a licence to map
+# once in .licensing.conf, where the answer applies to every component that
+# declares it:
+#
+#   LICENSING_LICENSE_ALIASES+=("<lowercased glob>|<SPDX-ID>")
+#   LICENSING_ALLOW="$LICENSING_ALLOW <SPDX-ID>"
+#
+# and something that is not a dependency at all belongs in
+# LICENSING_SELF_NAMES or LICENSING_IGNORE_PATHS instead. What is left for
+# this file is the genuine one-off: one package, one odd licence, one person
+# who read it.
+#
+# FORMAT. One component NAME per line — no version, no ecosystem, exactly the
+# name in the COMPONENT column of the failing row, with anything after a # as
+# a comment. Blank lines are ignored. Write down WHO decided, WHEN, and WHY:
+# the next person to see this line will be someone deciding whether it still
+# holds, and a bare name tells them nothing.
+#
+# Examples (commented out — a new repository has no exceptions):
+#
+#   example.com/foo/bar    # reviewed 2026-06-03 by <you>: custom BSD-equivalent
+#                          #   header, no copyleft clause, LICENSE in the module root
+#   @acme/widget-icons     # reviewed 2026-06-11 by <you>: CC-BY-4.0 icons, declared
+#                          #   as free text npm cannot map; attribution is in NOTICE
+#   some-python-package    # reviewed 2026-07-02 by <you>: PSF-2.0, declared only in
+#                          #   a trove classifier the alias table does not cover

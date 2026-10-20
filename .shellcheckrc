@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Bojan Čekrlić
+# SPDX-License-Identifier: MPL-2.0
+#
+# Read by shellcheck wherever it runs: the pre-commit hook, CI, and the shellcheck
+# actionlint runs over each workflow `run:` body.
+
+external-sources=true
+
+# SC2001 asks for ${var//search/replace} in place of sed. Parameter expansion has
+# no anchoring and no capture groups, so the anchored, back-referencing
+# substitutions in licensing.sh cannot be expressed as one.
+disable=SC2001

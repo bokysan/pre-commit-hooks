@@ -1,0 +1,8 @@
+version = 1
+
+# Files that cannot carry an inline SPDX header.
+[[annotations]]
+path = [".gitignore", ".editorconfig", ".licensing.conf", ".pre-commit-hooks.yaml", "mise.toml", "LICENSES/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Bojan Čekrlić"
+SPDX-License-Identifier = "MPL-2.0"

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Bojan Čekrlić
+# SPDX-License-Identifier: MPL-2.0
+#
+# Pinned tools for the hook itself, for the repository's own gates and for CI.
+# licensing.sh runs `mise exec -- syft` / `mise exec -- reuse` when mise provides
+# them, so these are the versions the tests and the self-check use.
+# Setup: `mise install`, then `pre-commit install --install-hooks -t pre-commit -t commit-msg`.
+
+[tools]
+syft = "1.51.0"
+"pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }
+pre-commit = "4.6.1"
+bats = "1.11.1"
