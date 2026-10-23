@@ -11,7 +11,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 ## Tests
 
-`tests/*.bats` build a throwaway git repository per test and run `licensing.sh` inside it, the way the hook does. A fix to `licensing.sh` lands with a test that fails without it. Never raise a timeout or loosen an assertion to make a test pass; a flaky test is a bug in the script.
+`tests/*.bats` build a throwaway git repository per test and run `licensing.sh` inside it, the way the hook does. A fix to `licensing.sh` lands with a test that fails without it. End every `[[ ]]` assertion with `|| false`: bash 3.2 (macOS) fails a test on a false `[[ ]]` only when it is the last line, and a hook checks for it. Never raise a timeout or loosen an assertion to make a test pass; a flaky test is a bug in the script.
 
 ## Versioning and releases
 
