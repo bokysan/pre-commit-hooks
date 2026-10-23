@@ -45,9 +45,9 @@ LICENSING_DENY=(GPL-3.0-only)
 @test "the preflight reports this checkout's manifests and stops at nested checkouts" {
   licensing check --only deps --mode full
   [ "$status" -eq 2 ]
-  [[ "$output" == *"app/build.gradle.kts"* ]]
-  [[ "$output" == *"sub/deep/build.gradle.kts"* ]]
-  [[ "$output" == *"in 2 location(s)"* ]]
-  [[ "$output" != *".claude/worktrees/probe"* ]]
-  [[ "$output" != *"nested-checkout"* ]]
+  [[ "$output" == *"app/build.gradle.kts"* ]] || false
+  [[ "$output" == *"sub/deep/build.gradle.kts"* ]] || false
+  [[ "$output" == *"in 2 location(s)"* ]] || false
+  [[ "$output" != *".claude/worktrees/probe"* ]] || false
+  [[ "$output" != *"nested-checkout"* ]] || false
 }

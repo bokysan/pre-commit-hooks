@@ -62,11 +62,9 @@ teardown() {
 
 @test "download asks for the licence and the exception text, not for a text by hand" {
   licensing download --dry-run
-  # grep, not [[ ]]: bash 3.2 (macOS) does not fail a test on a [[ ]] before the last line.
-  grep -qF 'would fetch LICENSES/Apache-2.0.txt' <<<"$output"
-  grep -qF 'would fetch LICENSES/LLVM-exception.txt' <<<"$output"
-  run grep -c 'by hand' <<<"$output"
-  [ "$output" = 0 ]
+  [[ "$output" == *"would fetch LICENSES/Apache-2.0.txt"* ]] || false
+  [[ "$output" == *"would fetch LICENSES/LLVM-exception.txt"* ]] || false
+  [[ "$output" != *"by hand"* ]] || false
 }
 
 @test "download --fix keeps both texts and claims the expression whole for the notice file" {

@@ -35,21 +35,21 @@ insert_before() {
   insert_before "$W/licensing.sh" 'LICENSING_LOCAL_MODE="full"' 'LICENSING_BRAND_NEW="x"'
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"setting LICENSING_BRAND_NEW has no entry"* ]]
+  [[ "$output" == *"setting LICENSING_BRAND_NEW has no entry"* ]] || false
 }
 
 @test "a setting read only from the environment without a README entry fails" {
   insert_before "$W/licensing.sh" 'LICENSING_LOCAL_MODE="full"' ': "${LICENSING_FROM_ENV:-}"'
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"setting LICENSING_FROM_ENV has no entry"* ]]
+  [[ "$output" == *"setting LICENSING_FROM_ENV has no entry"* ]] || false
 }
 
 @test "a README row for a setting the script does not have fails" {
   insert_before "$W/README.md" '## Machine-readable output for scripts' '| `LICENSING_GONE` | 1 | stale |'
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"documents LICENSING_GONE, which"* ]]
+  [[ "$output" == *"documents LICENSING_GONE, which"* ]] || false
 }
 
 @test "a new option without a README row or a --help line fails" {
@@ -57,22 +57,22 @@ insert_before() {
   grep -q -- '--brand-new' "$W/licensing.sh"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"option --brand-new has no row"* ]]
-  [[ "$output" == *"option --brand-new is not listed by"* ]]
+  [[ "$output" == *"option --brand-new has no row"* ]] || false
+  [[ "$output" == *"option --brand-new is not listed by"* ]] || false
 }
 
 @test "a new hook without a README row fails" {
   printf '\n- id: licensing-brand-new\n  name: x\n  entry: licensing.sh\n  language: script\n' >> "$W/.pre-commit-hooks.yaml"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"hook licensing-brand-new"* ]]
+  [[ "$output" == *"hook licensing-brand-new"* ]] || false
 }
 
 @test "a new environment variable the README does not name fails" {
   insert_before "$W/licensing.sh" 'LICENSING_LOCAL_MODE="full"' ': "${SOME_TOOL_HOME:-}"'
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"environment variable SOME_TOOL_HOME"* ]]
+  [[ "$output" == *"environment variable SOME_TOOL_HOME"* ]] || false
 }
 
 @test "a default file name the README does not name fails" {
@@ -80,14 +80,14 @@ insert_before() {
   grep -q 'NOTICE.txt' "$W/licensing.sh"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"file NOTICE.txt"* ]]
+  [[ "$output" == *"file NOTICE.txt"* ]] || false
 }
 
 @test "an in-page link to a heading that does not exist fails" {
   insert_before "$W/README.md" '## Machine-readable output for scripts' 'See [nowhere](#no-such-heading).'
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"links to #no-such-heading"* ]]
+  [[ "$output" == *"links to #no-such-heading"* ]] || false
 }
 
 @test "a README default that differs from the script's fails" {
@@ -95,7 +95,7 @@ insert_before() {
   grep -q '^LICENSING_MAX_FINDINGS=50$' "$W/licensing.sh"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"default shown for LICENSING_MAX_FINDINGS"* ]]
+  [[ "$output" == *"default shown for LICENSING_MAX_FINDINGS"* ]] || false
 }
 
 @test "an optional setting labelled as required fails" {
@@ -103,7 +103,7 @@ insert_before() {
   mv "$W/README.new" "$W/README.md"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"LICENSING_MAX_FINDINGS is under \"Settings the defaults cover\""* ]]
+  [[ "$output" == *"LICENSING_MAX_FINDINGS is under \"Settings the defaults cover\""* ]] || false
 }
 
 @test "a new command without a hook that runs it fails" {
@@ -111,7 +111,7 @@ insert_before() {
   grep -q 'init report"$' "$W/licensing.sh"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"command report has no hook"* ]]
+  [[ "$output" == *"command report has no hook"* ]] || false
 }
 
 @test "a hook entry with a command or option the script lacks fails" {
@@ -119,8 +119,8 @@ insert_before() {
   grep -q 'sbomb' "$W/.pre-commit-hooks.yaml"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"hook licensing-sbom runs command 'sbomb'"* ]]
-  [[ "$output" == *"passes option '--format=x'"* ]]
+  [[ "$output" == *"hook licensing-sbom runs command 'sbomb'"* ]] || false
+  [[ "$output" == *"passes option '--format=x'"* ]] || false
 }
 
 @test "a short default shown as (…) fails" {
@@ -128,7 +128,7 @@ insert_before() {
   grep -q '^LICENSING_MAX_FINDINGS=(…)$' "$W/README.md"
   gate
   [ "$status" -eq 1 ]
-  [[ "$output" == *"shortens the default of LICENSING_MAX_FINDINGS"* ]]
+  [[ "$output" == *"shortens the default of LICENSING_MAX_FINDINGS"* ]] || false
 }
 
 @test "a long default shown as (…) passes" {

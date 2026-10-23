@@ -64,7 +64,7 @@ LICENSING_DOC_LICENSE=MIT
 @test "fix is not a command any more" {
   licensing fix
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown command: fix"* ]]
+  [[ "$output" == *"unknown command: fix"* ]] || false
 }
 
 @test "every committed vendor directory gets its own entry: Go, Rust, PHP, Ruby, iOS" {

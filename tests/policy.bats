@@ -62,14 +62,14 @@ hooks_checkout() { # hooks_checkout <dir>: a repository holding licensing.sh, ta
   rm "$ROOT/.licensing.conf"
   licensing check --only deps --mode full
   [ "$status" -ne 0 ]
-  [[ "$output" == *".licensing.conf"* ]]
+  [[ "$output" == *".licensing.conf"* ]] || false
 }
 
 @test "a policy file that is a copy of the script is refused, not recursed into" {
   cp "$LICENSING" "$ROOT/.licensing.conf"
   licensing check --only deps --mode full
   [ "$status" -eq 2 ]
-  [[ "$output" == *"looks like a copy"* ]]
+  [[ "$output" == *"looks like a copy"* ]] || false
 }
 
 @test "a policy file missing LICENSING_DENY is refused" {
@@ -77,5 +77,5 @@ hooks_checkout() { # hooks_checkout <dir>: a repository holding licensing.sh, ta
 '
   licensing check --only deps --mode full
   [ "$status" -eq 2 ]
-  [[ "$output" == *"LICENSING_DENY"* ]]
+  [[ "$output" == *"LICENSING_DENY"* ]] || false
 }

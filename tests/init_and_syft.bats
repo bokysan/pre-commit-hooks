@@ -64,7 +64,7 @@ LICENSING_COPYRIGHT="2026 Test"
   sed -i.bak 's/^# generated with syft .*/# generated with syft 0.0.1/' "$ROOT/REUSE.toml"
   licensing check --only toml --mode full
   [ "$status" -eq 0 ]
-  [[ "$output" == *"generated with 0.0.1"* ]]
+  [[ "$output" == *"generated with 0.0.1"* ]] || false
 }
 
 @test "a REUSE.toml with no syft record checks clean and says nothing" {
@@ -72,15 +72,15 @@ LICENSING_COPYRIGHT="2026 Test"
   sed -i.bak '/^# generated with syft /d' "$ROOT/REUSE.toml"
   licensing check --only toml --mode full
   [ "$status" -eq 0 ]
-  [[ "$output" != *"warning: syft"* ]]
+  [[ "$output" != *"warning: syft"* ]] || false
 }
 
 @test "run as a hook, hints name the pre-commit command and committed files name no path" {
   EXTRA_ENV=(PRE_COMMIT=1)
   licensing init
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pre-commit run licensing-download --hook-stage manual"* ]]
-  [[ "$output" != *"$LICENSING download"* ]]
+  [[ "$output" == *"pre-commit run licensing-download --hook-stage manual"* ]] || false
+  [[ "$output" != *"$LICENSING download"* ]] || false
   run grep -l "$BATS_TEST_DIRNAME" "$ROOT/.licensing.conf" "$ROOT/REUSE.toml" "$ROOT/.license-exceptions.txt"
   [ "$status" -ne 0 ]
 }
@@ -88,7 +88,7 @@ LICENSING_COPYRIGHT="2026 Test"
 @test "run by hand, hints name the script as it was invoked" {
   licensing init
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$LICENSING download"* ]]
+  [[ "$output" == *"$LICENSING download"* ]] || false
 }
 
 @test "the identity init is given in the environment is kept in .licensing.conf" {

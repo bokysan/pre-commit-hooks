@@ -79,9 +79,9 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   crate gpl-crate 2.0.0 'license = "GPL-3.0-only"'
   deps_check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"gpl-crate"* ]]
-  [[ "$output" == *"GPL-3.0-only"* ]]
-  [[ "$output" != *"mit-crate"* ]]
+  [[ "$output" == *"gpl-crate"* ]] || false
+  [[ "$output" == *"GPL-3.0-only"* ]] || false
+  [[ "$output" != *"mit-crate"* ]] || false
 }
 
 @test "the crate licence reaches the SBOM, not the gate alone" {
@@ -92,7 +92,7 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   run jq -r '.packages[] | select(.name=="mit-crate") | .licenseDeclared + .licenseConcluded' "$ROOT.sbom.json"
   rm -f "$ROOT.sbom.json"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"MIT"* ]]
+  [[ "$output" == *"MIT"* ]] || false
 }
 
 @test "a crate naming a license-file is read as text" {
@@ -100,7 +100,7 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   printf '%s' "$MIT_TEXT" > "$CARGO_HOME/$INDEX/mit-crate-1.0.0/COPYING.txt"
   crate gpl-crate 2.0.0 'license = "GPL-3.0-only"'
   deps_check
-  [[ "$output" != *"mit-crate"* ]]
+  [[ "$output" != *"mit-crate"* ]] || false
 }
 
 @test "with the install check skipped, a crate not unpacked stays lockfile-only and exempt" {
@@ -114,8 +114,8 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   [ "$status" -eq 0 ]
   run cat "$ROOT.sbom.json"
   rm -f "$ROOT.sbom.json"
-  [[ "$output" == *'"mit-crate"'* ]]
-  [[ "$output" == *"NOASSERTION"* ]]
+  [[ "$output" == *'"mit-crate"'* ]] || false
+  [[ "$output" == *"NOASSERTION"* ]] || false
 }
 
 @test "a crate unpacked after a cached run is not served from the stale cache" {
@@ -132,7 +132,7 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   EXTRA_ENV=(LICENSING_CACHE=0 LICENSING_VERBOSE=1 "CARGO_HOME=$CARGO_HOME")
   deps_check_as_is
   deps_check_as_is
-  [[ "$output" != *"from cache"* ]]
+  [[ "$output" != *"from cache"* ]] || false
 }
 
 @test "crates missing from the Cargo registry stop the check and name cargo fetch" {
@@ -143,9 +143,9 @@ deps_check_as_is() { licensing check --only deps --mode full --skip-install-chec
   deps_check
   rm -rf "$BIN"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cargo fetch"* ]]
-  [[ "$output" == *"some crates of Cargo.lock are not there"* ]]
-  [[ "$output" != *"%CARGOCRATES%"* ]]
+  [[ "$output" == *"cargo fetch"* ]] || false
+  [[ "$output" == *"some crates of Cargo.lock are not there"* ]] || false
+  [[ "$output" != *"%CARGOCRATES%"* ]] || false
 }
 
 @test "auto-install runs cargo fetch, and a GPL crate it unpacks fails the check" {
@@ -164,6 +164,6 @@ SH
   deps_check
   rm -rf "$BIN"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"gpl-crate"* ]]
-  [[ "$output" == *"GPL-3.0-only"* ]]
+  [[ "$output" == *"gpl-crate"* ]] || false
+  [[ "$output" == *"GPL-3.0-only"* ]] || false
 }

@@ -39,7 +39,7 @@ deps_check() { licensing check --only deps --mode full "$@"; }
   # Control: with nothing recorded the dependency with no licence fails, so the
   # run below has a verdict to flip.
   [ "$status" -ne 0 ]
-  [[ "$output" == *"silent-pkg"* ]]
+  [[ "$output" == *"silent-pkg"* ]] || false
 
   put .license-exceptions.txt "${SELF_LINE}silent-pkg = MIT   # reviewed: ships no LICENSE, MIT upstream
 "
@@ -48,7 +48,7 @@ deps_check() { licensing check --only deps --mode full "$@"; }
 
   # The inventory, not just the gate.
   licensing --obligations
-  [[ "$output" == *"MIT"* ]]
+  [[ "$output" == *"MIT"* ]] || false
 }
 
 @test "a reviewed licence never overrules the one the package states" {
@@ -56,9 +56,9 @@ deps_check() { licensing check --only deps --mode full "$@"; }
 talkative-pkg = Apache-2.0   # deliberately wrong: the package itself says MIT
 "
   deps_check --porcelain
-  [[ "$output" == *"warning"* ]]
-  [[ "$output" == *"talkative-pkg"* ]]
-  [[ "$output" == *"the scan's answer stands"* ]]
+  [[ "$output" == *"warning"* ]] || false
+  [[ "$output" == *"talkative-pkg"* ]] || false
+  [[ "$output" == *"the scan's answer stands"* ]] || false
 }
 
 @test "a reviewed licence on the deny list still fails" {
@@ -66,7 +66,7 @@ talkative-pkg = Apache-2.0   # deliberately wrong: the package itself says MIT
 "
   deps_check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"GPL-3.0-only"* ]]
+  [[ "$output" == *"GPL-3.0-only"* ]] || false
 }
 
 @test "recording a reviewed licence costs a re-read, not a re-scan" {
@@ -79,5 +79,5 @@ talkative-pkg = Apache-2.0   # deliberately wrong: the package itself says MIT
 "
   deps_check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"from cache"* ]]
+  [[ "$output" == *"from cache"* ]] || false
 }

@@ -76,6 +76,16 @@ repos:
         always_run: true
         pass_filenames: false
 
+      - id: bats-asserts-fail-on-bash-3
+        name: every [[ ]] assertion in a test ends with || false
+        description: >-
+          bash 3.2 (macOS) does not fail a bats test on a [[ ]] that returns
+          false unless it is the test's last line, so a bare one asserts
+          nothing there. `|| false` fails on every bash.
+        entry: '^\s+\[\[ .* \]\]\s*$'
+        language: pygrep
+        files: '^tests/.*\.bats$'
+
       - id: bats
         name: bats (licensing.sh behaviour tests)
         description: ~30 s; runs before a push and in CI, not on every commit.
