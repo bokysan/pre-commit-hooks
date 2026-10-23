@@ -4639,21 +4639,32 @@ notice_claimed_ids() { # notice_claimed_ids <generated vendor annotations>
 # else. Each of the three is load-bearing — see LICENSING_NOTICE_FILE.
 notice_licence_expr() { # notice_licence_expr <generated vendor annotations>
   local here="${TMPDIR_RUN}/notice.here" want="${TMPDIR_RUN}/notice.want"
-  local claimed="${TMPDIR_RUN}/notice.claimed" id out=""
+  local claimed="${TMPDIR_RUN}/notice.claimed" id lic exc texts out=""
   licences_present | LC_ALL=C sort -u > "$here"
   syft_wanted_ids | LC_ALL=C sort -u > "$want"
   notice_claimed_ids "$1" > "$claimed"
+  texts=$'\n'"$(cat "$here")"$'\n'
   while IFS= read -r id; do
-    # An id REUSE can read. Anything else would be a "bad license" in the file
-    # this annotation is supposed to make compliant.
-    case "$id" in
-      ""|*[!A-Za-z0-9.+-]*) continue ;;
-      [A-Za-z0-9]*) ;;
-      *) continue ;;
-    esac
+    # "Apache-2.0 WITH LLVM-exception" is claimed whole, and only when both
+    # texts are on disk: an exception id on its own is not a licence, and
+    # "AND LLVM-exception" would be a bad expression in the annotation.
+    lic="${id%% WITH *}" exc=""
+    [[ "$id" == *" WITH "* ]] && exc="${id#* WITH }"
+    reuse_readable_text "$lic" "$texts" || continue
+    [[ -z "$exc" ]] || reuse_readable_text "$exc" "$texts" || continue
     out="${out:+$out AND }${id}"
-  done < <(LC_ALL=C comm -12 "$want" "$here" | LC_ALL=C comm -23 - "$claimed")
+  done < <(LC_ALL=C comm -23 "$want" "$claimed")
   echo "$out"
+}
+
+# An id REUSE can read that has a text on disk. Anything else would be a "bad
+# license" in the file the notice annotation is supposed to make compliant.
+reuse_readable_text() { # reuse_readable_text <id> <newline-wrapped list of texts>
+  case "$1" in
+    ""|*[!A-Za-z0-9.+-]*) return 1 ;;
+    [A-Za-z0-9]*) [[ "$2" == *$'\n'"$1"$'\n'* ]] ;;
+    *) return 1 ;;
+  esac
 }
 
 # REUSE-IgnoreStart — this function WRITES an SPDX header, so the tag below is
@@ -5076,7 +5087,12 @@ cmd_download() { # cmd_download <all|fix>
     esac
   done
   progress_step
-  LC_ALL=C sort -u -o "$want" "$want"
+  # A licence with an exception needs both texts, and `reuse download` fetches
+  # an exception like any licence: "Apache-2.0 WITH LLVM-exception" wants
+  # Apache-2.0 and LLVM-exception.
+  awk '{ n = split($0, a, / WITH /); for (i = 1; i <= n; i++) print a[i] }' "$want" \
+    | LC_ALL=C sort -u > "${want}.sorted"
+  mv "${want}.sorted" "$want"
   licences_present | LC_ALL=C sort -u > "$here"
   vnote "licences in use: $(tr '\n' ' ' < "$want")"
   vnote "texts on disk:   $(tr '\n' ' ' < "$here")"

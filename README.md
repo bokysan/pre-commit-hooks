@@ -75,7 +75,7 @@ The result is used for:
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/bokysan/pre-commit-hooks
-    rev: v1.40.0
+    rev: v1.40.1
     hooks:
       - id: licensing # runs on every commit
       - id: licensing-init # the rest run only when you ask
